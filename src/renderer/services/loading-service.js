@@ -26,16 +26,10 @@
         }
         app.loadingCount += 1;
         app.isLoading = true;
-        console.log(
-          `[Loader] start ${key} -> loadingCount=${app.loadingCount}`,
-        );
         try {
           return await value(...args);
         } finally {
           app.loadingCount = Math.max(0, app.loadingCount - 1);
-          console.log(
-            `[Loader] done ${key} -> loadingCount=${app.loadingCount}`,
-          );
           if (app.loadingCount === 0) {
             await withMinVisibleTime(app.loadingStartedAt || Date.now(), 250);
             app.isLoading = false;
@@ -61,7 +55,6 @@
 
   async function endLoading(app, startedAt = null) {
     app.loadingCount = Math.max(0, app.loadingCount - 1);
-    console.log(`[Loader] endLoading -> loadingCount=${app.loadingCount}`);
     if (app.loadingCount > 0) {
       app.isLoading = true;
       return;

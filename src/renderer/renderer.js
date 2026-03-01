@@ -1641,40 +1641,7 @@ function preisRundenApp() {
         alert("Fehler: " + error.message);
       } finally {
         await this.endLoading(loadingStartedAt);
-        this.resetUiInteractionState();
       }
-    },
-
-    resetUiInteractionState() {
-      // Sicherheitsnetz fuer haengende Interaktionszustaende nach Dialog/Drag.
-      this.draggedPreis = null;
-      this.dragOverLeft = false;
-
-      const active = document.activeElement;
-      if (active && typeof active.blur === "function") {
-        active.blur();
-      }
-
-      if (typeof PointerEvent !== "undefined") {
-        window.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
-      }
-      window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-      window.dispatchEvent(new Event("dragend", { bubbles: true }));
-
-      const selection = window.getSelection ? window.getSelection() : null;
-      if (selection && typeof selection.removeAllRanges === "function") {
-        selection.removeAllRanges();
-      }
-
-      this.$nextTick(() => {
-        // Reflow triggern und Fokuszustand im Editor neutralisieren.
-        void document.body.offsetHeight;
-        const editorInput = document.querySelector(".fixed.inset-0.z-40 input");
-        if (editorInput && typeof editorInput.focus === "function") {
-          editorInput.focus({ preventScroll: true });
-          editorInput.blur();
-        }
-      });
     },
 
     // Drag & Drop Handler
