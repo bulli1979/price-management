@@ -1,0 +1,1298 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net;"
+    />
+    <link rel="icon" type="image/png" href="./assets/comic-pokal-app.png" />
+    <title>Preis-Runden App</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <script
+      src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"
+      defer
+    ></script>
+    <style>
+      .drag-over { background-color: #dbeafe !important; border-color: #3b82f6 !important; }
+      .dragging { opacity: 0.5; }
+      .preis-card { cursor: grab; transition: all 0.15s ease; }
+      .preis-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+      .preis-card:active { cursor: grabbing; }
+      .in-runde { opacity: 0.5; }
+    </style>
+  </head>
+  <body class="bg-gray-100 min-h-screen">
+    <div x-data="preisRundenApp" class="min-h-screen">
+      <div
+        x-show="isLoading"
+        x-transition.opacity
+        class="fixed top-4 right-4 z-[100] pointer-events-none"
+      >
+        <div class="bg-white/95 border border-gray-200 rounded-lg shadow-xl px-3 py-2 flex items-center gap-2 pointer-events-none">
+          <div class="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+          <span class="text-sm text-gray-700">Lädt...</span>
+        </div>
+      </div>
+
+      <!-- ============================================== -->
+      <!-- RUNDE EDITOR - Vollbild -->
+      <!-- ============================================== -->
+      <div x-show="rundeEditorMode" class="fixed inset-0 bg-gray-100 z-40 flex flex-col">
+        <!-- Editor Header -->
+        <div class="bg-white shadow-md px-6 py-3 flex-shrink-0">
+          <div class="flex justify-between items-center">
+            <div class="flex items-center space-x-4">
+              <button
+                @click="backFromRundeEditor()"
+                class="text-blue-600 hover:text-blue-800 font-medium"
+              >
+                ← Zurück
+              </button>
+              <div>
+                <h1 class="text-xl font-bold text-gray-800">
+                  Runde <span x-text="aktuelleRunde ? aktuelleRunde.rundennummer : ''"></span>
+                </h1>
+                <p class="text-sm text-gray-500">
+                  <span x-text="aktuellesLotto ? aktuellesLotto.name : ''"></span> — 
+                  Tag <span x-text="getAktuelleRundeDatumLabel()"></span>
+                </p>
+              </div>
+            </div>
+            <template x-if="aktuelleRunde">
+            <div class="flex items-center space-x-3">
+              <div class="flex items-center space-x-2 text-sm">
+                <span class="text-gray-500">Einnahmen:</span>
+                <span class="font-semibold text-gray-700" x-text="formatCurrency(getAktuelleRundeEinnahmenDisplay())"></span>
+              </div>
+              <div class="flex items-center space-x-2 text-sm">
+                <span class="text-gray-500">Ausgaben:</span>
+                <span class="font-semibold text-gray-700" x-text="formatCurrency(parseOptionalNumber(aktuelleRunde ? aktuelleRunde.ausgaben : 0))"></span>
+              </div>
+              <div class="flex items-center space-x-2 text-sm">
+                <span class="text-gray-500 font-semibold text-blue-700">Eingesetzter Betrag:</span>
+                <span class="font-semibold text-blue-700" x-text="formatCurrency(parseOptionalNumber(aktuelleRunde ? aktuelleRunde.price_amount : 0))"></span>
+              </div>
+              <button
+                @click="openRundeDetailsModal()"
+                class="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+                title="Rundenwerte bearbeiten"
+              >
+                ✏️ Werte bearbeiten
+              </button>
+              <button
+                @click="openRegenerateConfirmModal()"
+                class="px-3 py-1.5 bg-yellow-500 text-white rounded hover:bg-yellow-600 text-sm"
+                title="Preise neu generieren (basierend auf Eingesetzter Betrag)"
+              >
+                🔄 Neu generieren
+              </button>
+              <button
+                @click="exportPreisblatt(aktuelleRunde.id)"
+                class="px-3 py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 text-sm"
+                title="Preisblatt: Preise nach Kategorie, billig→teuer"
+              >
+                🏷️ Preisblatt
+              </button>
+              <button
+                @click="exportUebersicht(aktuelleRunde.id)"
+                class="px-3 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm"
+                title="Übersicht: Alle Preise + Gesamtpreis + Geldeinsatz"
+              >
+                📊 Übersicht
+              </button>
+              <button
+                @click="openPdfFolder()"
+                class="px-3 py-1.5 bg-gray-500 text-white rounded hover:bg-gray-600 text-sm"
+                title="PDF-Ordner öffnen"
+              >
+                📂 Ordner
+              </button>
+            </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- Editor Body: Links/Rechts -->
+        <div class="flex-1 flex overflow-hidden">
+          <!-- LINKE SEITE: Gewählte Preise -->
+          <div
+            class="w-2/5 bg-white border-r border-gray-200 flex flex-col"
+            @dragover.prevent="handleDragOver($event)"
+            @dragenter.prevent="dragOverLeft = true"
+            @dragleave="handleDragLeaveLeft($event)"
+            @drop="handleDropToRunde($event)"
+            :class="{ 'drag-over': dragOverLeft }"
+          >
+            <div class="px-4 py-3 border-b border-gray-200 bg-gray-50 flex-shrink-0">
+              <div class="flex justify-between items-center">
+                <h2 class="font-semibold text-gray-800">
+                  Gewählte Preise
+                  <span class="text-sm font-normal text-gray-500" x-text="'(' + rundePreise.length + ')'"></span>
+                </h2>
+              </div>
+              <p class="text-xs text-gray-400 mt-1">Preise hierher ziehen oder rechts klicken zum Hinzufügen</p>
+              
+              <!-- Kategorien mit bearbeitbarer Anzahl -->
+              <div x-show="hasAktuelleRundeKategorien()" class="mt-2 space-y-1">
+                <div class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Kategorien / Anzahl</div>
+                <template x-for="kat in getAktuelleRundeKategorienList()" :key="kat.kategorie_id">
+                  <div class="flex items-center justify-between bg-white rounded px-2 py-1 border border-gray-200">
+                    <span class="text-xs text-gray-700 flex-1 truncate" x-text="kat.kategorie_name"></span>
+                    <div class="flex items-center space-x-1 ml-2">
+                      <span class="text-xs text-gray-400">Anz:</span>
+                      <input
+                        type="text"
+                        inputmode="numeric"
+                        x-model.number="kat.anzahl"
+                        @change="updateRundeKategorieAnzahl(kat)"
+                        class="w-12 text-center border border-gray-300 rounded px-1 py-0.5 text-xs"
+                      />
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </div>
+            
+            <div class="flex-1 overflow-y-auto p-3 space-y-1">
+              <!-- Gruppiert nach Kategorie -->
+              <template x-for="[katName, preise] in getRundePreiseGroupedEntries()" :key="katName">
+                <div class="mb-3">
+                  <div class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 px-2" x-text="katName"></div>
+                  <template x-for="rp in preise" :key="rp.id">
+                    <div
+                      class="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 mb-1 cursor-grab"
+                    >
+                      <div class="flex-1 min-w-0">
+                        <div class="font-medium text-sm text-gray-800 truncate" x-text="rp.name"></div>
+                        <div class="text-xs text-gray-500 truncate" x-text="rp.herkunft || '—'"></div>
+                      </div>
+                      <div class="flex items-center space-x-2 ml-2 flex-shrink-0">
+                        <button
+                          type="button"
+                          draggable="true"
+                          @click.stop
+                          @dragstart="handleDragStart($event, rp, 'runde')"
+                          @dragend="handleDragEnd()"
+                          class="text-gray-400 hover:text-gray-600 text-base leading-none cursor-grab"
+                          title="Zum Entfernen ziehen"
+                        >⋮⋮</button>
+                        <input
+                          type="text"
+                          inputmode="numeric"
+                          x-model.number="rp.rp_anzahl"
+                          @change="updatePreisAnzahl(rp)"
+                          class="w-10 text-center border border-gray-300 rounded px-1 py-0.5 text-xs"
+                          title="Anzahl"
+                        />
+                        <span class="text-xs text-gray-400">×</span>
+                        <span class="text-sm font-semibold text-blue-700" x-text="formatCurrency(rp.preis)"></span>
+                        <span x-show="rp.rp_anzahl > 1" class="text-xs text-gray-500" x-text="'= ' + formatCurrency(rp.preis * rp.rp_anzahl)"></span>
+                        <button
+                          @click="removePreisFromRundeEditor(rp.id)"
+                          class="text-red-400 hover:text-red-600 text-lg leading-none"
+                          title="Entfernen"
+                        >×</button>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </template>
+              
+              <div x-show="rundePreise.length === 0" class="text-center text-gray-400 py-12">
+                <div class="text-4xl mb-2">📦</div>
+                <p>Noch keine Preise gewählt</p>
+                <p class="text-sm mt-1">Preise von rechts hinzufügen</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- RECHTE SEITE: Verfügbare Preise -->
+          <div
+            class="flex-1 flex flex-col bg-gray-50"
+            @dragover.prevent="handleDragOver($event)"
+            @drop="handleDropToAvailable($event)"
+          >
+            <!-- Filter -->
+            <div class="px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
+              <div class="flex items-center space-x-3">
+                <div class="flex-1 relative">
+                  <input
+                    type="text"
+                    x-model="preisFilter"
+                    placeholder="🔍 Preise suchen..."
+                    class="w-full border border-gray-300 rounded-lg px-4 py-2 pl-4 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  />
+                  <button
+                    x-show="preisFilter"
+                    @click="preisFilter = ''"
+                    class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >×</button>
+                </div>
+                <select
+                  x-model="kategorieFilter"
+                  class="border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                >
+                  <option value="">Alle Kategorien</option>
+                  <template x-for="kat in kategorien" :key="kat.id">
+                    <option :value="kat.id" x-text="kat.name"></option>
+                  </template>
+                </select>
+                <div class="text-sm text-gray-500 whitespace-nowrap">
+                  <span x-text="getFilteredVerfuegbarePreise().length"></span> Preise
+                </div>
+              </div>
+            </div>
+
+            <!-- Preis-Cards Grid -->
+            <div class="flex-1 overflow-y-auto p-4">
+              <div class="grid grid-cols-2 xl:grid-cols-3 gap-3">
+                <template x-for="preis in getFilteredVerfuegbarePreise()" :key="preis.id">
+                  <div
+                    class="preis-card bg-white border rounded-lg p-3 shadow-sm"
+                    :class="{ 'in-runde': isPreisInRunde(preis.id), 'border-gray-200': !isPreisInRunde(preis.id) }"
+                    @click="addPreisToRundeEditor(preis)"
+                  >
+                    <div class="flex justify-between items-start mb-1">
+                      <h4 class="font-medium text-sm text-gray-800 truncate flex-1" x-text="preis.name"></h4>
+                      <span
+                        x-show="isPreisInRunde(preis.id)"
+                        class="text-xs bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded ml-1 flex-shrink-0"
+                      >gewählt</span>
+                    </div>
+                    <div class="text-xs text-gray-500 truncate" x-text="preis.herkunft || '—'"></div>
+                    <div class="flex justify-between items-center mt-2">
+                      <span class="text-xs text-gray-400">
+                        Verfügbar: <span x-text="preis.anzahl - getPreisVerbraucht(preis.id)"></span>/<span x-text="preis.anzahl"></span>
+                      </span>
+                      <div class="flex items-center gap-2">
+                        <button
+                          type="button"
+                          draggable="true"
+                          @click.stop
+                          @dragstart="handleDragStart($event, preis, 'available')"
+                          @dragend="handleDragEnd()"
+                          class="text-gray-400 hover:text-gray-600 text-base leading-none cursor-grab"
+                          title="In Runde ziehen"
+                        >⋮⋮</button>
+                        <span class="font-semibold text-sm text-green-700" x-text="formatCurrency(preis.preis)"></span>
+                      </div>
+                    </div>
+                    <div x-show="getPreisVerbraucht(preis.id) > 0" class="text-xs text-orange-500 mt-0.5">
+                      <span x-text="getPreisVerbraucht(preis.id)"></span>× eingesetzt
+                    </div>
+                  </div>
+                </template>
+              </div>
+              
+              <div x-show="getFilteredVerfuegbarePreise().length === 0" class="text-center text-gray-400 py-12">
+                <div class="text-4xl mb-2">🔍</div>
+                <p>Keine Preise gefunden</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Editor Footer: Gesamtsumme -->
+        <div class="bg-white border-t border-gray-300 px-6 py-3 flex-shrink-0 shadow-lg">
+          <div class="flex justify-between items-center">
+            <div class="flex items-center space-x-8">
+              <div>
+                <span class="text-sm text-gray-500">Gesamtsumme:</span>
+                <span
+                  class="text-xl font-bold ml-2"
+                  :class="getRundeDiffClass()"
+                  x-text="formatCurrency(getRundeGesamtsumme())"
+                ></span>
+              </div>
+              <div>
+                <span class="text-sm text-gray-500">Eingesetzter Betrag:</span>
+                <span class="text-lg font-semibold text-blue-700 ml-2" x-text="formatCurrency(getRundeZielsumme())"></span>
+              </div>
+              <div>
+                <span class="text-sm text-gray-500">Differenz:</span>
+                <span
+                  class="text-lg font-semibold ml-2"
+                  :class="getRundeGesamtsumme() - getRundeZielsumme() > 0 ? 'text-red-500' : 'text-green-500'"
+                  x-text="formatCurrency(getRundeGesamtsumme() - getRundeZielsumme())"
+                ></span>
+              </div>
+            </div>
+            <div class="flex items-center space-x-4">
+              <div class="text-sm text-gray-500">
+                Einnahmen: <span class="font-semibold" x-text="formatCurrency(getAktuelleRundeEinnahmenDisplay())"></span>
+              </div>
+              <div class="w-48 bg-gray-200 rounded-full h-3">
+                <div
+                  class="h-3 rounded-full transition-all duration-300"
+                  :class="(getRundeGesamtsumme() / getRundeZielsumme()) > 1.05 ? 'bg-red-500' : (getRundeGesamtsumme() / getRundeZielsumme()) > 0.9 ? 'bg-green-500' : 'bg-yellow-500'"
+                  :style="getRundeProgressWidthStyle()"
+                ></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div x-show="showRundeDetailsModal" class="fixed inset-0 z-[90] bg-black/40 flex items-center justify-center">
+        <div class="bg-white rounded-lg shadow-xl p-5 w-full max-w-xl">
+          <h3 class="text-lg font-semibold text-gray-800 mb-4">Rundenwerte bearbeiten</h3>
+          <div class="grid grid-cols-3 gap-3">
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">Einnahmen</label>
+              <input x-ref="rundeDraftEinnahmenInput" type="text" inputmode="decimal" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm" />
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">Ausgaben</label>
+              <input x-ref="rundeDraftAusgabenInput" type="text" inputmode="decimal" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm" />
+            </div>
+            <div>
+              <label class="block text-xs text-blue-600 mb-1 font-semibold">Eingesetzter Betrag</label>
+              <input x-ref="rundeDraftPriceAmountInput" type="text" inputmode="decimal" class="w-full border-2 border-blue-400 rounded px-2 py-1.5 text-sm bg-blue-50 font-semibold" />
+            </div>
+          </div>
+          <div class="mt-4 flex justify-end gap-2">
+            <button @click="closeRundeDetailsModal()" class="px-3 py-1.5 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-sm">Abbrechen</button>
+            <button @click="saveRundeDetailsFromDraft()" class="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm">💾 Speichern</button>
+          </div>
+        </div>
+      </div>
+
+      <div x-show="showRegenerateConfirmModal" class="fixed inset-0 z-[95] bg-black/40 flex items-center justify-center">
+        <div class="bg-white rounded-lg shadow-xl p-5 w-full max-w-lg">
+          <h3 class="text-lg font-semibold text-gray-800 mb-3">Preise neu generieren?</h3>
+          <p class="text-sm text-gray-600">
+            Alle aktuell gewählten Preise dieser Runde werden entfernt und neu generiert.
+          </p>
+          <div class="mt-4 flex justify-end gap-2">
+            <button
+              @click="closeRegenerateConfirmModal()"
+              class="px-3 py-1.5 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-sm"
+            >
+              Abbrechen
+            </button>
+            <button
+              @click="confirmRegeneratePreise()"
+              class="px-3 py-1.5 bg-yellow-500 text-white rounded hover:bg-yellow-600 text-sm"
+            >
+              🔄 Ja, neu generieren
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============================================== -->
+      <!-- HAUPTANSICHT (wenn Editor nicht offen) -->
+      <!-- ============================================== -->
+      <div x-show="!rundeEditorMode" class="container mx-auto px-4 py-8">
+      <!-- Header -->
+      <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+        <div class="flex justify-between items-center">
+          <div class="flex items-center space-x-3">
+            <img
+              src="./assets/comic-pokal-app.png"
+              alt="Comic Pokal Logo"
+              class="w-14 h-14 object-contain"
+            />
+            <div>
+              <h1 class="text-3xl font-bold text-gray-800 mb-2">Preis-Runden App</h1>
+              <p class="text-gray-600">Verwalten Sie Ihre Preise und führen Sie Runden durch</p>
+            </div>
+          </div>
+          <div class="flex space-x-3">
+            <button
+              @click="exportAllDataJSON()"
+              class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium flex items-center space-x-2"
+              title="Alle Daten als JSON-Datei exportieren"
+            >
+              <span>📤</span><span>Daten exportieren</span>
+            </button>
+            <button
+              @click="importAllDataJSON()"
+              class="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 text-sm font-medium flex items-center space-x-2"
+              title="Daten aus JSON-Datei importieren (überschreibt alle vorhandenen Daten!)"
+            >
+              <span>📥</span><span>Daten importieren</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Navigation Tabs -->
+      <div class="bg-white rounded-lg shadow-md mb-6">
+        <div class="border-b border-gray-200">
+          <nav class="-mb-px flex space-x-8 px-6">
+            <button
+              @click="activeTab = 'preise'"
+              :class="activeTab === 'preise' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+              class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm"
+              >Preise verwalten</button>
+            <button
+              @click="activeTab = 'kategorien'"
+              :class="activeTab === 'kategorien' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+              class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm"
+              >Kategorien</button>
+              <button
+                @click="activeTab = 'konfigurationen'"
+                :class="activeTab === 'konfigurationen' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm"
+              >Konfigurationen</button>
+            <button
+                @click="activeTab = 'lottos'"
+                :class="activeTab === 'lottos' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+              class="whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm"
+              >Lottos</button>
+          </nav>
+        </div>
+      </div>
+
+      <!-- Preise Tab -->
+      <div x-show="activeTab === 'preise'" class="space-y-6">
+        <!-- Excel Upload -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-semibold text-gray-800 mb-4">Excel-Datei hochladen</h2>
+          <div class="flex items-center space-x-4">
+            <input
+              type="file"
+              @change="handleFileUpload"
+              accept=".xlsx,.xls"
+              class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+            />
+          </div>
+          <div
+            x-show="uploadMessage"
+            class="mt-4 p-3 rounded-lg"
+            :class="uploadSuccess ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'"
+          >
+            <span x-text="uploadMessage"></span>
+          </div>
+        </div>
+
+        <!-- Preise Tabelle -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+          <div class="flex justify-between items-center mb-4">
+            <h2 class="text-xl font-semibold text-gray-800">Preisliste</h2>
+            <button
+              @click="showAddPreisModal = true"
+              class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+              >Preis hinzufügen</button>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-gray-200">
+              <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Herkunft</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Anzahl</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Preis</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Spende</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Gesamtpreis</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Aktionen</th>
+                </tr>
+              </thead>
+              <tbody class="bg-white divide-y divide-gray-200">
+                <template x-for="preis in preise" :key="preis.id">
+                  <tr>
+                      <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900" x-text="preis.name"></td>
+                      <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="preis.herkunft"></td>
+                      <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="preis.anzahl"></td>
+                      <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="formatCurrency(preis.preis)"></td>
+                      <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        <span x-show="preis.is_a_spende" class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-emerald-100 text-emerald-700">Ja</span>
+                        <span x-show="!preis.is_a_spende" class="text-gray-400">Nein</span>
+                      </td>
+                      <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900" x-text="formatCurrency(preis.gesamtpreis)"></td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                        <button @click="editPreis(preis)" class="text-blue-600 hover:text-blue-900 mr-3">Bearbeiten</button>
+                        <button @click="deletePreis(preis.id)" class="text-red-600 hover:text-red-900">Löschen</button>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="mt-4 p-4 bg-gray-50 rounded-lg">
+            <div class="flex justify-between items-center">
+                <span class="text-lg font-semibold text-gray-800">Gesamtsumme:</span>
+                <span class="text-xl font-bold text-blue-600" x-text="formatCurrency(getGesamtsumme())"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Kategorien Tab -->
+      <div x-show="activeTab === 'kategorien'" class="space-y-6">
+        <div class="bg-white rounded-lg shadow-md p-6">
+          <div class="flex justify-between items-center mb-4">
+              <h2 class="text-xl font-semibold text-gray-800">Kategorien verwalten</h2>
+            <button
+              @click="showAddKategorieModal = true"
+              class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+              >Kategorie hinzufügen</button>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <template x-for="kategorie in kategorien" :key="kategorie.id">
+              <div class="border border-gray-200 rounded-lg p-4">
+                  <h3 class="font-semibold text-gray-800" x-text="kategorie.name"></h3>
+                <p class="text-sm text-gray-600 mt-1">
+                    <span x-text="formatCurrency(kategorie.wert1)"></span> -
+                    <span x-text="formatCurrency(kategorie.wert2)"></span>
+                </p>
+                <div class="mt-3 flex space-x-2">
+                    <button @click="editKategorie(kategorie)" class="text-blue-600 hover:text-blue-900 text-sm">Bearbeiten</button>
+                    <button @click="deleteKategorie(kategorie.id)" class="text-red-600 hover:text-red-900 text-sm">Löschen</button>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <!-- Konfigurationen Tab -->
+        <div x-show="activeTab === 'konfigurationen'" class="space-y-6">
+          <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="flex justify-between items-center mb-4">
+              <h2 class="text-xl font-semibold text-gray-800">Runden-Konfigurationen</h2>
+                  <button
+                @click="openNewKonfigModal()"
+                class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+              >Neue Konfiguration</button>
+            </div>
+
+            <div x-show="konfigurationen.length === 0" class="text-center text-gray-500 py-8">
+              Noch keine Konfigurationen vorhanden.
+            </div>
+
+            <div class="space-y-4">
+              <template x-for="config in konfigurationen" :key="config.id">
+                <div class="border border-gray-200 rounded-lg p-4">
+                  <div class="flex justify-between items-center mb-3">
+                    <h3 class="font-semibold text-gray-800 text-lg" x-text="config.name"></h3>
+                    <div class="flex space-x-2">
+                      <button @click="editKonfiguration(config)" class="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm">Bearbeiten</button>
+                      <button @click="deleteKonfigurationConfirm(config.id)" class="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-sm">Löschen</button>
+                    </div>
+                  </div>
+                  <div class="mt-2">
+                    <div x-show="!hasKonfigKategorien(config)" class="text-sm text-gray-500 italic">Keine Kategorien</div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                      <template x-for="kk in getKonfigKategorien(config)" :key="kk.kategorie_id">
+                        <div class="bg-gray-50 rounded px-3 py-2 flex items-center justify-between">
+                          <div>
+                            <span class="font-medium text-sm" x-text="kk.kategorie_name"></span>
+                            <span class="text-xs text-gray-500 ml-1">(<span x-text="kk.anzahl_min"></span>-<span x-text="kk.anzahl_max"></span> Stk.)</span>
+                          </div>
+                        </div>
+                      </template>
+                    </div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+
+        <!-- Konfiguration Bearbeiten Modal -->
+        <div x-show="showEditKonfigModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div class="relative top-10 mx-auto p-5 border w-11/12 max-w-3xl shadow-lg rounded-md bg-white">
+            <div class="mt-3">
+          <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-medium text-gray-900">
+                  Konfiguration bearbeiten: <span x-text="editingKonfig ? editingKonfig.name : ''"></span>
+                </h3>
+                <button @click="showEditKonfigModal = false" class="text-gray-500 hover:text-gray-700">&times;</button>
+              </div>
+
+              <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                <div class="flex space-x-2">
+                  <input type="text" x-model="editingKonfig.name" class="flex-1 border border-gray-300 rounded-md px-3 py-2" />
+                  <button @click="saveKonfigName()" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm">Name speichern</button>
+                </div>
+              </div>
+
+              <div class="mb-4">
+                <h4 class="font-medium text-gray-700 mb-2">Zugewiesene Kategorien</h4>
+                <div x-show="editingKonfigKategorien.length === 0" class="text-sm text-gray-500 italic py-2">Noch keine Kategorien</div>
+                <div class="space-y-2">
+                  <template x-for="(kk, idx) in editingKonfigKategorien" :key="kk.kategorie_id">
+                    <div class="flex items-center space-x-3 bg-gray-50 rounded-lg p-3">
+                      <span class="font-medium text-sm flex-1" x-text="kk.kategorie_name"></span>
+                      <div class="flex items-center space-x-2">
+                        <label class="text-xs text-gray-500">Min:</label>
+                        <input type="text" inputmode="numeric" x-model.number="kk.anzahl_min" class="w-16 border border-gray-300 rounded px-2 py-1 text-sm" @change="updateKonfigKategorie(kk)" />
+                        <label class="text-xs text-gray-500">Max:</label>
+                        <input type="text" inputmode="numeric" x-model.number="kk.anzahl_max" class="w-16 border border-gray-300 rounded px-2 py-1 text-sm" @change="updateKonfigKategorie(kk)" />
+                        <span class="text-xs text-gray-400">(<span x-text="formatCurrency(kk.wert1)"></span> - <span x-text="formatCurrency(kk.wert2)"></span>)</span>
+                        <button @click="removeKategorieVonKonfig(kk.kategorie_id)" class="text-red-600 hover:text-red-800 text-sm ml-2" title="Kategorie entfernen">✕</button>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+
+              <div class="border-t pt-4">
+                <h4 class="font-medium text-gray-700 mb-2">Kategorie hinzufügen</h4>
+                <div class="flex items-end space-x-3">
+                  <div class="flex-1">
+                    <label class="block text-xs text-gray-500 mb-1">Kategorie</label>
+                    <select x-model="newKonfigKategorie.kategorieId" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm">
+                      <option value="">-- Kategorie wählen --</option>
+                      <template x-for="kat in availableKategorienForKonfig" :key="kat.id">
+                        <option :value="kat.id" x-text="kat.name + ' (' + formatCurrency(kat.wert1) + ' - ' + formatCurrency(kat.wert2) + ')'"></option>
+                      </template>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="block text-xs text-gray-500 mb-1">Min</label>
+                    <input type="text" inputmode="numeric" x-model.number="newKonfigKategorie.anzahlMin" class="w-20 border border-gray-300 rounded-md px-3 py-2 text-sm" />
+                  </div>
+                  <div>
+                    <label class="block text-xs text-gray-500 mb-1">Max</label>
+                    <input type="text" inputmode="numeric" x-model.number="newKonfigKategorie.anzahlMax" class="w-20 border border-gray-300 rounded-md px-3 py-2 text-sm" />
+                  </div>
+                  <button @click="addKategorieToKonfig()" class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm" :disabled="!newKonfigKategorie.kategorieId">Hinzufügen</button>
+                </div>
+              </div>
+
+              <div class="mt-6 flex justify-end">
+                <button @click="closeEditKonfigModal()" class="px-6 py-2 bg-gray-600 text-white rounded hover:bg-gray-700">Schließen</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Neue Konfiguration Modal -->
+        <div x-show="showNewKonfigModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+            <div class="mt-3">
+              <h3 class="text-lg font-medium text-gray-900 mb-4">Neue Konfiguration</h3>
+              <form @submit.prevent="saveNewKonfiguration()">
+                <div class="mb-4">
+                  <label class="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                  <input type="text" x-model="newKonfig.name" required class="w-full border border-gray-300 rounded-md px-3 py-2" placeholder="z.B. Standard-Runde..." />
+                </div>
+                <div class="flex justify-end space-x-3">
+                  <button type="button" @click="showNewKonfigModal = false" class="px-4 py-2 bg-gray-200 text-gray-800 rounded hover:bg-gray-300">Abbrechen</button>
+                  <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Erstellen</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <!-- Lottos Tab -->
+        <div x-show="activeTab === 'lottos' && !lottoViewMode" class="space-y-6">
+          <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="flex justify-between items-center mb-4">
+              <h2 class="text-xl font-semibold text-gray-800">Lottos verwalten</h2>
+              <button @click="showNeuesLottoModal = true" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">Neues Lotto</button>
+          </div>
+
+            <div class="space-y-4">
+              <template x-for="lotto in lottos" :key="lotto.id">
+                <div class="border border-gray-200 rounded-lg p-4">
+                  <div class="flex justify-between items-center">
+                    <div class="flex-1">
+                      <h3 class="font-semibold text-gray-800 text-lg" x-text="lotto.name"></h3>
+                      <div class="text-sm text-gray-600 mt-2 space-y-1">
+                        <p><span class="font-medium">Zeitraum:</span> <span x-text="lotto.date_from"></span> - <span x-text="lotto.date_to"></span></p>
+                        <p><span class="font-medium">Tage:</span> <span x-text="lotto.num_days || 0"></span></p>
+                      </div>
+                    </div>
+                    <div class="flex space-x-2 ml-4">
+                      <button @click="viewLotto(lotto.id)" class="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm">Anzeigen</button>
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <!-- Lotto Vollbild-Ansicht -->
+        <div x-show="activeTab === 'lottos' && lottoViewMode" class="flex flex-col">
+          <!-- Header -->
+          <div class="bg-white shadow-md p-4">
+            <div class="flex justify-between items-center">
+              <div class="flex-1">
+                <button @click="backToLottoList()" class="text-blue-600 hover:text-blue-800 mb-2">← Zurück zur Liste</button>
+                
+                <div x-show="!lottoEditMode">
+                  <h1 class="text-2xl font-bold text-gray-800" x-text="aktuellesLotto ? aktuellesLotto.name : ''"></h1>
+                  <div class="text-sm text-gray-600 mt-1">
+                    <span x-text="aktuellesLotto ? aktuellesLotto.date_from : ''"></span> - <span x-text="aktuellesLotto ? aktuellesLotto.date_to : ''"></span>
+        </div>
+      </div>
+
+                <div x-show="lottoEditMode" class="space-y-3">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700">Titel</label>
+                    <input type="text" x-model="newLotto.name" class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" />
+                  </div>
+                  <div class="grid grid-cols-2 gap-4">
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700">Datum von</label>
+                      <input type="date" x-model="newLotto.dateFrom" class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" />
+                    </div>
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700">Datum bis</label>
+                      <input type="date" x-model="newLotto.dateTo" class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" />
+                    </div>
+                  </div>
+                  <div class="flex space-x-2">
+                    <button @click="saveLottoFromView()" class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">Speichern</button>
+                    <button @click="cancelEditLotto()" class="px-4 py-2 bg-gray-300 text-gray-700 rounded hover:bg-gray-400">Abbrechen</button>
+                  </div>
+                </div>
+              </div>
+              
+              <div class="text-right">
+                <div x-show="!lottoEditMode">
+                  <div class="flex space-x-2 mb-2">
+                    <button @click="startEditLotto()" class="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700">Bearbeiten</button>
+                    <button @click="exportLottoPDF()" class="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700" title="Lotto-Übersicht drucken">📄 Lotto-PDF</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tabs für Tage -->
+          <div class="bg-white border-b border-gray-200">
+            <div class="flex space-x-1 px-4 overflow-x-auto">
+              <button
+                @click="showAddDayModal = true"
+                class="whitespace-nowrap py-3 px-4 border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 font-medium text-sm"
+              >+ Tag hinzufügen</button>
+              <template x-for="day in lottoDays" :key="day.id">
+                <div class="relative group">
+                  <button
+                    @click="switchLottoDay(day.day_number)"
+                    :class="aktuellerLottoTag === day.day_number 
+                      ? 'border-blue-500 text-blue-600 bg-blue-50' 
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                    class="whitespace-nowrap py-3 px-4 border-b-2 font-medium text-sm"
+                  >
+                    Tag <span x-text="day.day_number"></span>
+                    <div class="text-xs mt-1" x-text="day.date"></div>
+                  </button>
+                  <button
+                    @click="deleteLottoDay(day.day_number)"
+                    class="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 text-xs opacity-0 group-hover:opacity-100 hover:bg-red-600"
+                    title="Tag löschen"
+                  >×</button>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- Inhalt für aktuellen Tag -->
+          <div class="flex-1 overflow-y-auto p-6">
+            <div x-show="aktuellerLottoTag !== null" class="bg-white rounded-lg shadow-md p-6">
+              <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-semibold text-gray-800">
+                  Spielrunden - Tag <span x-text="aktuellerLottoTag"></span>
+                </h2>
+                <div class="flex items-center space-x-4">
+                  <div class="flex items-center space-x-2">
+                    <label class="text-sm text-gray-500 whitespace-nowrap">🍴 Gastro:</label>
+                    <input
+                      type="text"
+                      inputmode="decimal"
+                      :value="getAktuellerTagGastroValue()"
+                      @change="saveDayField('gastro_revenue', $event)"
+                      class="w-28 border border-gray-300 rounded px-2 py-1 text-sm text-right font-semibold"
+                    />
+                  </div>
+                  <div class="flex items-center space-x-2">
+                    <label class="text-sm text-gray-500 whitespace-nowrap">🎁 Spenden:</label>
+                    <input
+                      type="text"
+                      inputmode="decimal"
+                      :value="getAktuellerTagSpendenValue()"
+                      @change="saveDayField('donations', $event)"
+                      class="w-28 border border-gray-300 rounded px-2 py-1 text-sm text-right font-semibold"
+                    />
+                  </div>
+                  <button
+                    @click="openNeueRundeModal()"
+                    class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+                  >Neue Runde</button>
+                </div>
+              </div>
+
+              <div class="space-y-4">
+                <template x-for="runde in getAktuellerTagRundenList()" :key="runde.id">
+                  <div class="border border-gray-200 rounded-lg p-4 hover:border-blue-300 transition-colors">
+                    <div class="flex justify-between items-center">
+                <div>
+                        <h4 class="font-semibold text-gray-800">
+                          Runde <span x-text="runde.rundennummer"></span>
+                        </h4>
+                        <p class="text-sm text-gray-600 mt-1">
+                          Einnahmen: <span x-text="formatCurrency(runde.einnahmen || 0)"></span> |
+                          Ausgaben: <span x-text="formatCurrency(runde.ausgaben || 0)"></span>
+                        </p>
+                      </div>
+                      <div class="flex space-x-2">
+                        <button
+                          @click="openRundeEditor(runde.id)"
+                          class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+                        >📝 Bearbeiten</button>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+                <div x-show="!hasAktuellerTagRunden()" 
+                     class="text-center text-gray-500 py-8">
+                  Noch keine Runden für diesen Tag
+                </div>
+              </div>
+
+              <div class="mt-6 bg-gray-50 border border-gray-200 rounded-lg p-4">
+                <h3 class="text-sm font-semibold text-gray-800 mb-1">⚖️ Tag-Vergleich Einnahmen zu Ausgaben (2:1)</h3>
+                <p class="text-xs text-gray-500 mb-4">
+                  Vergleichsregel: <strong>1 Ausgaben = 2 Einnahmen</strong>. Beispiel: 100 Einnahmen und 50 Ausgaben sind gleich hoch.
+                </p>
+
+                <div class="space-y-3">
+                  <div>
+                    <div class="flex justify-between text-xs text-gray-600 mb-1">
+                      <span>Einnahmen</span>
+                      <span x-text="formatCurrency(getAktuellerTagVergleich().einnahmen)"></span>
+                    </div>
+                    <div class="w-full h-3 rounded-full bg-gray-200 overflow-hidden">
+                      <div
+                        class="h-3 rounded-full bg-green-500 transition-all duration-300"
+                        :style="'width: ' + getAktuellerTagVergleich().einnahmenPercent.toFixed(2) + '%'"
+                      ></div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div class="flex justify-between text-xs text-gray-600 mb-1">
+                      <span>Ausgaben × 2</span>
+                      <span x-text="formatCurrency(getAktuellerTagVergleich().ausgabenSkaliert) + ' (aus ' + formatCurrency(getAktuellerTagVergleich().ausgaben) + ')'"></span>
+                    </div>
+                    <div class="w-full h-3 rounded-full bg-gray-200 overflow-hidden">
+                      <div
+                        class="h-3 rounded-full bg-red-500 transition-all duration-300"
+                        :style="'width: ' + getAktuellerTagVergleich().ausgabenPercent.toFixed(2) + '%'"
+                      ></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="mt-3 text-xs"
+                     :class="getTagVergleichClass()">
+                  <span x-show="isTagVergleichGleichstand()">Gleichstand im 2:1 Vergleich.</span>
+                  <span x-show="getAktuellerTagVergleich().differenzSkaliert >= 0.01">
+                    Einnahmen liegen im 2:1 Vergleich vorne um
+                    <strong x-text="formatCurrency(getAktuellerTagVergleich().differenzSkaliert)"></strong>.
+                  </span>
+                  <span x-show="getAktuellerTagVergleich().differenzSkaliert <= -0.01">
+                    Ausgaben liegen im 2:1 Vergleich vorne um
+                    <strong x-text="formatCurrency(getTagVergleichDifferenzAbs())"></strong>.
+                  </span>
+                </div>
+              </div>
+            </div>
+            
+            <div x-show="aktuellerLottoTag === null" class="bg-white rounded-lg shadow-md p-6 text-center">
+              <p class="text-gray-500 text-lg mb-4">Noch keine Tage vorhanden</p>
+              <button @click="showAddDayModal = true" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">Ersten Tag hinzufügen</button>
+            </div>
+
+            <!-- Einnahmen/Ausgaben Diagramm -->
+            <div x-show="lottoDays.length > 0" class="bg-white rounded-lg shadow-md p-6 mt-6">
+              <h2 class="text-xl font-semibold text-gray-800 mb-4">📊 Einnahmen / Ausgaben Übersicht</h2>
+              <div class="relative" style="height: 300px;">
+                <canvas id="lottoChart"></canvas>
+              </div>
+              <div class="mt-4 grid grid-cols-3 gap-4 text-center">
+                <div class="bg-green-50 rounded-lg p-3">
+                  <div class="text-xs text-gray-500 uppercase">Runden-Einnahmen</div>
+                  <div class="text-lg font-bold text-green-600" x-text="formatCurrency(getLottoTotalEinnahmen())"></div>
+                </div>
+                <div class="bg-emerald-50 rounded-lg p-3">
+                  <div class="text-xs text-gray-500 uppercase">Gastro Einnahmen</div>
+                  <div class="text-lg font-bold text-emerald-600" x-text="formatCurrency(getLottoTotalGastro())"></div>
+                </div>
+                <div class="bg-teal-50 rounded-lg p-3">
+                  <div class="text-xs text-gray-500 uppercase">Spenden</div>
+                  <div class="text-lg font-bold text-teal-600" x-text="formatCurrency(getLottoTotalSpenden())"></div>
+                </div>
+                <div class="bg-red-50 rounded-lg p-3">
+                  <div class="text-xs text-gray-500 uppercase">Ausgaben Total</div>
+                  <div class="text-lg font-bold text-red-600" x-text="formatCurrency(getLottoTotalAusgaben())"></div>
+                </div>
+                <div class="bg-blue-50 rounded-lg p-3">
+                  <div class="text-xs text-gray-500 uppercase">Geldeinsatz Total</div>
+                  <div class="text-lg font-bold text-blue-600" x-text="formatCurrency(getLottoTotalPriceAmount())"></div>
+                </div>
+                <div class="bg-purple-50 rounded-lg p-3">
+                  <div class="text-xs text-gray-500 uppercase">Gewinn / Verlust</div>
+                  <div class="text-lg font-bold" :class="getLottoGewinn() >= 0 ? 'text-green-600' : 'text-red-600'" x-text="formatCurrency(getLottoGewinn())"></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Preishistorie -->
+            <div x-show="preisHistorie.length > 0" class="bg-white rounded-lg shadow-md p-6 mt-6">
+              <h2 class="text-xl font-semibold text-gray-800 mb-4">📋 Preishistorie</h2>
+              <p class="text-sm text-gray-500 mb-3">Übersicht welcher Preis wann und wie oft verteilt wurde.</p>
+              <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                  <thead class="bg-gray-50">
+                    <tr>
+                      <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Preis</th>
+                      <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Herkunft</th>
+                      <th class="px-4 py-2 text-right text-xs font-medium text-gray-500 uppercase">Einzelpreis</th>
+                      <th class="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase">Verfügbar</th>
+                      <th class="px-4 py-2 text-center text-xs font-medium text-gray-500 uppercase">Eingesetzt</th>
+                      <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Einsätze</th>
+                    </tr>
+                  </thead>
+                  <tbody class="bg-white divide-y divide-gray-200">
+                    <template x-for="item in getPreisHistorieGrouped()" :key="item.name">
+                      <tr>
+                        <td class="px-4 py-2 text-sm font-medium text-gray-900" x-text="item.name"></td>
+                        <td class="px-4 py-2 text-sm text-gray-500" x-text="item.herkunft || '—'"></td>
+                        <td class="px-4 py-2 text-sm text-right font-semibold text-green-700" x-text="formatCurrency(item.preis)"></td>
+                        <td class="px-4 py-2 text-sm text-center" x-text="item.verfuegbar"></td>
+                        <td class="px-4 py-2 text-sm text-center font-semibold" :class="item.total > item.verfuegbar ? 'text-red-600' : 'text-orange-600'" x-text="item.total"></td>
+                        <td class="px-4 py-2 text-xs text-gray-500">
+                          <template x-for="(e, idx) in item.einsaetze" :key="idx">
+                            <span class="inline-block bg-gray-100 rounded px-2 py-0.5 mr-1 mb-0.5">
+                              Tag <span x-text="e.tag"></span> / R<span x-text="e.runde"></span>
+                              <span x-show="e.anzahl > 1" class="text-orange-500">(×<span x-text="e.anzahl"></span>)</span>
+                            </span>
+                          </template>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ============================================== -->
+        <!-- MODALS -->
+        <!-- ============================================== -->
+
+        <!-- Excel Mapping Modal -->
+        <div x-show="showMappingModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div class="relative top-20 mx-auto p-5 border w-11/12 max-w-4xl shadow-lg rounded-md bg-white">
+            <div class="mt-3">
+              <h3 class="text-lg font-medium text-gray-900 mb-4">Excel-Spalten zuordnen</h3>
+              <div class="space-y-4 mb-6">
+                <div class="grid grid-cols-2 gap-4">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Name</label>
+                    <select x-model="columnMapping.name" class="block w-full border border-gray-300 rounded-md px-3 py-2">
+                      <option value="">-- Bitte wählen --</option>
+                      <template x-for="col in excelColumns" :key="col">
+                        <option :value="col" x-text="col"></option>
+                      </template>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Herkunft</label>
+                    <select x-model="columnMapping.herkunft" class="block w-full border border-gray-300 rounded-md px-3 py-2">
+                      <option value="">-- Bitte wählen --</option>
+                      <template x-for="col in excelColumns" :key="col">
+                        <option :value="col" x-text="col"></option>
+                      </template>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Anzahl</label>
+                    <select x-model="columnMapping.anzahl" class="block w-full border border-gray-300 rounded-md px-3 py-2">
+                      <option value="">-- Bitte wählen --</option>
+                      <template x-for="col in excelColumns" :key="col">
+                        <option :value="col" x-text="col"></option>
+                      </template>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Preis</label>
+                    <select x-model="columnMapping.preis" class="block w-full border border-gray-300 rounded-md px-3 py-2">
+                      <option value="">-- Bitte wählen --</option>
+                      <template x-for="col in excelColumns" :key="col">
+                        <option :value="col" x-text="col"></option>
+                      </template>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mb-6">
+                <h4 class="text-md font-medium text-gray-800 mb-2">Vorschau:</h4>
+                <div class="overflow-x-auto border border-gray-200 rounded-lg">
+                  <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                      <tr>
+                        <template x-for="col in excelColumns" :key="col">
+                          <th class="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase" x-text="col"></th>
+                        </template>
+                      </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                      <template x-for="(row, index) in excelPreview" :key="index">
+                        <tr>
+                          <template x-for="col in excelColumns" :key="col">
+                            <td class="px-4 py-2 text-sm text-gray-500" x-text="row[col] || ''"></td>
+                          </template>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="flex justify-end space-x-3 mt-6">
+                <button type="button" @click="cancelMappingModal()" class="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400">Abbrechen</button>
+                <button type="button" @click="uploadExcel" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Importieren</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Add Preis Modal -->
+        <div x-show="showAddPreisModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+            <div class="mt-3">
+              <h3 class="text-lg font-medium text-gray-900 mb-4">Preis hinzufügen</h3>
+              <form @submit.prevent="savePreis">
+                <div class="space-y-4">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700">Name</label>
+                    <input type="text" x-model="newPreis.name" required class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" />
+                  </div>
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700">Herkunft</label>
+                    <input type="text" x-model="newPreis.herkunft" class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" />
+                  </div>
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700">Anzahl</label>
+                    <input type="text" inputmode="numeric" x-model="newPreis.anzahl" required class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" />
+                  </div>
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700">Preis</label>
+                    <input type="text" inputmode="decimal" x-model="newPreis.preis" required class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" />
+                  </div>
+                  <div>
+                    <label class="inline-flex items-center space-x-2 cursor-pointer">
+                      <input type="checkbox" x-model="newPreis.isASpend" class="rounded border-gray-300" />
+                      <span class="text-sm text-gray-700">Ist eine Spende (`isASpend`)</span>
+                    </label>
+                  </div>
+                </div>
+                <div class="flex justify-end space-x-3 mt-6">
+                  <button type="button" @click="showAddPreisModal = false" class="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400">Abbrechen</button>
+                  <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Speichern</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <!-- Add Kategorie Modal -->
+        <div x-show="showAddKategorieModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+            <div class="mt-3">
+              <h3 class="text-lg font-medium text-gray-900 mb-4">
+                <span x-text="newKategorie.id ? 'Kategorie bearbeiten' : 'Kategorie hinzufügen'"></span>
+              </h3>
+              <form @submit.prevent="saveKategorie">
+                <div class="space-y-4">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700">Titel</label>
+                    <input type="text" x-model="newKategorie.name" required placeholder="z.B. Niedrigpreis" class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" />
+                  </div>
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700">Preisspanne von</label>
+                    <input type="text" inputmode="decimal" x-model="newKategorie.wert1" required class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" />
+                  </div>
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700">Preisspanne bis</label>
+                    <input type="text" inputmode="decimal" x-model="newKategorie.wert2" required class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" />
+                  </div>
+                  <div class="text-sm text-gray-500">
+                    <p>Preise zwischen <span x-text="formatCurrency(newKategorie.wert1 || 0)"></span> und <span x-text="formatCurrency(newKategorie.wert2 || 0)"></span></p>
+                  </div>
+                </div>
+                <div class="flex justify-end space-x-3 mt-6">
+                  <button type="button" @click="cancelKategorieModal()" class="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400">Abbrechen</button>
+                  <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Speichern</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <!-- Neues Lotto Modal -->
+        <div x-show="showNeuesLottoModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+            <div class="mt-3">
+              <h3 class="text-lg font-medium text-gray-900 mb-4">Neues Lotto</h3>
+              <form @submit.prevent="saveLotto">
+                <div class="space-y-4">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700">Titel</label>
+                    <input type="text" x-model="newLotto.name" required placeholder="z.B. Weihnachtslotto 2026" class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" />
+                  </div>
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700">Datum von</label>
+                    <input type="date" x-model="newLotto.dateFrom" required class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" />
+                  </div>
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700">Datum bis</label>
+                    <input type="date" x-model="newLotto.dateTo" required class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" />
+                  </div>
+                </div>
+                <div class="flex justify-end space-x-3 mt-6">
+                  <button type="button" @click="cancelNeuesLottoModal()" class="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400">Abbrechen</button>
+                  <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Speichern</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tag hinzufügen Modal -->
+        <div x-show="showAddDayModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+            <div class="mt-3">
+              <h3 class="text-lg font-medium text-gray-900 mb-4">Tag hinzufügen</h3>
+              <form @submit.prevent="addLottoDay">
+                <div class="space-y-4">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700">Datum</label>
+                    <input type="date" x-model="newLottoDay.date" required class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" />
+                  </div>
+                </div>
+                <div class="flex justify-end space-x-3 mt-6">
+                  <button type="button" @click="cancelAddDayModal()" class="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400">Abbrechen</button>
+                  <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Hinzufügen</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <!-- Neue Runde Modal -->
+        <div x-show="showNeueRundeModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div class="relative top-10 mx-auto p-5 border w-11/12 max-w-4xl shadow-lg rounded-md bg-white">
+            <div class="mt-3">
+              <h3 class="text-lg font-medium text-gray-900 mb-4">Neue Runde erstellen</h3>
+              <form @submit.prevent="createRunde">
+                <div class="space-y-4">
+                  <!-- Konfiguration -->
+                  <div>
+                    <label class="flex items-center space-x-2">
+                      <input type="checkbox" x-model="newRunde.useConfig" @change="onKonfigurationChange()" class="rounded border-gray-300" />
+                      <span class="text-sm font-medium text-gray-700">Konfiguration verwenden</span>
+                    </label>
+                    <div x-show="newRunde.useConfig" class="mt-2">
+                      <select x-model.number="newRunde.configId" @change="onKonfigurationChange($event)" class="block w-full border border-gray-300 rounded-md px-3 py-2">
+                        <option value="">-- Konfiguration wählen --</option>
+                        <template x-for="config in konfigurationen" :key="config.id">
+                          <option :value="config.id" x-text="config.name"></option>
+                        </template>
+                      </select>
+                    </div>
+                  </div>
+
+                  <!-- Gewinnrunden -->
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700">Anzahl Gewinnrunden</label>
+                    <input type="text" inputmode="numeric" x-model.number="newRunde.gewinnrunden" required class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" />
+                  </div>
+
+                  <!-- Einnahmen und Ausgaben -->
+                  <div class="grid grid-cols-3 gap-4">
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700">Einnahmen (CHF)</label>
+                      <input type="text" inputmode="decimal" x-model="newRunde.einnahmen" @input="calculateAusgaben()" class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" />
+                      <p x-show="newRundeErrors.einnahmen" x-text="newRundeErrors.einnahmen" class="mt-1 text-xs text-red-600"></p>
+                    </div>
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700">Ausgaben (CHF)</label>
+                      <input type="text" inputmode="decimal" x-model="newRunde.ausgaben" class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" />
+                      <p x-show="newRundeErrors.ausgaben" x-text="newRundeErrors.ausgaben" class="mt-1 text-xs text-red-600"></p>
+                      <p class="text-xs text-gray-500 mt-1">Vorschlag: Hälfte der Einnahmen</p>
+                    </div>
+                    <div>
+                      <label class="block text-sm font-medium text-blue-700 font-semibold">Eingesetzter Betrag (CHF)</label>
+                      <input type="text" inputmode="decimal" x-model="newRunde.priceAmount" class="mt-1 block w-full border-2 border-blue-400 rounded-md px-3 py-2 bg-blue-50 font-semibold" />
+                      <p x-show="newRundeErrors.priceAmount" x-text="newRundeErrors.priceAmount" class="mt-1 text-xs text-red-600"></p>
+                      <p class="text-xs text-blue-500 mt-1">Steuert die Preisverteilung pro Runde</p>
+                    </div>
+                  </div>
+
+                  <!-- Kategorien -->
+                  <div>
+                    <div class="flex justify-between items-center mb-2">
+                      <label class="block text-sm font-medium text-gray-700">Kategorien</label>
+                      <button type="button" @click="addKategorieToRunde()" class="text-sm text-blue-600 hover:text-blue-800">+ Kategorie hinzufügen</button>
+                    </div>
+                    
+                    <div class="space-y-2">
+                      <template x-for="(kat, index) in newRunde.kategorien" :key="(newRunde.configId || 'no-config') + '-' + (kat.rowKey || index)">
+                        <div class="flex items-center space-x-2 p-2 border border-gray-200 rounded">
+                          <select
+                            :value="String(kat.kategorieId || '')"
+                            @change="onKategorieChanged(index, $event)"
+                            required
+                            class="flex-1 border border-gray-300 rounded-md px-3 py-2"
+                          >
+                            <option value="">-- Kategorie wählen --</option>
+                            <template x-for="kategorie in kategorien" :key="kategorie.id">
+                              <option
+                                :value="String(kategorie.id)"
+                                :selected="String(kategorie.id) === String(kat.kategorieId)"
+                                x-text="kategorie.name"
+                              ></option>
+                            </template>
+                          </select>
+                          <div class="flex items-center space-x-2">
+                            <span class="text-sm text-gray-600">Anzahl:</span>
+                            <input type="text" inputmode="numeric" x-model.number="kat.anzahl" required class="w-20 border border-gray-300 rounded-md px-2 py-1" />
+                            <span x-show="kat.anzahlMax && kat.anzahlMax < 999" class="text-xs text-gray-500">(0-<span x-text="kat.anzahlMax"></span>)</span>
+                          </div>
+                          <button type="button" @click="removeKategorieFromRunde(index)" class="text-red-600 hover:text-red-800 px-2">×</button>
+                        </div>
+                      </template>
+                      <div x-show="newRunde.kategorien.length === 0" class="text-sm text-gray-500 text-center py-4">Noch keine Kategorien</div>
+                    </div>
+                  </div>
+                </div>
+
+                <p x-show="newRundeErrors.form" x-text="newRundeErrors.form" class="mt-3 text-sm text-red-600"></p>
+                
+                <div class="flex justify-end space-x-3 mt-6">
+                  <button type="button" @click="cancelNeueRundeModal()" class="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400">Abbrechen</button>
+                  <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Runde erstellen</button>
+              </div>
+            </form>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <script src="services/loading-service.js"></script>
+    <script src="services/runde-details-service.js"></script>
+    <script src="renderer.js"></script>
+  </body>
+</html>

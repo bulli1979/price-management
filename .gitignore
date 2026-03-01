@@ -1,0 +1,57 @@
+# Dependencies
+node_modules/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime / temp
+*.pid
+*.seed
+*.pid.lock
+*.tmp
+*.temp
+.cache/
+tmp/
+temp/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Build output (Node/Electron)
+dist/
+out/
+release/
+build/
+*.tgz
+*.blockmap
+latest*.yml
+
+# Electron builder / tooling artifacts
+electron-builder.env
+
+# Tailwind / PostCSS / bundler caches
+.parcel-cache/
+.turbo/
+.vite/
+
+# Framework build directories (if used)
+.next/
+.nuxt/
+.svelte-kit/
+.angular/
+.vercel/
+.output/
+
