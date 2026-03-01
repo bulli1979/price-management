@@ -35,6 +35,7 @@ function preisRundenApp() {
     rundeDraftEinnahmen: "",
     rundeDraftAusgaben: "",
     rundeDraftPriceAmount: "",
+    rundeDraftKategorien: [],
     verbrauchtePreise: {},
     preisHistorie: [],
     preisFilter: "",
@@ -594,20 +595,21 @@ function preisRundenApp() {
       );
     },
 
-    // Vergleich 2:1 -> Ausgaben werden mit Faktor 2 skaliert.
+    // Vergleich 2:1 nur fuer die Balken-Skala:
+    // Ausgaben-Balken hat die doppelte optische Gewichtung, Zahlen bleiben unveraendert.
     getAktuellerTagVergleich() {
       const einnahmen = this.getAktuellerTagEinnahmen();
       const ausgaben = this.getAktuellerTagAusgaben();
-      const ausgabenSkaliert = ausgaben * 2;
-      const maxWert = Math.max(einnahmen, ausgabenSkaliert, 1);
+      const einnahmenBarWert = einnahmen;
+      const ausgabenBarWert = ausgaben * 2;
+      const maxBarWert = Math.max(einnahmenBarWert, ausgabenBarWert, 1);
 
       return {
         einnahmen,
         ausgaben,
-        ausgabenSkaliert,
-        einnahmenPercent: (einnahmen / maxWert) * 100,
-        ausgabenPercent: (ausgabenSkaliert / maxWert) * 100,
-        differenzSkaliert: einnahmen - ausgabenSkaliert,
+        einnahmenPercent: (einnahmenBarWert / maxBarWert) * 100,
+        ausgabenPercent: (ausgabenBarWert / maxBarWert) * 100,
+        differenz: einnahmen - ausgaben,
       };
     },
 
@@ -716,17 +718,17 @@ function preisRundenApp() {
     },
 
     getTagVergleichClass() {
-      const diff = this.getAktuellerTagVergleich().differenzSkaliert;
+      const diff = this.getAktuellerTagVergleich().differenz;
       if (Math.abs(diff) < 0.01) return "text-gray-600";
       return diff > 0 ? "text-green-700" : "text-red-700";
     },
 
     isTagVergleichGleichstand() {
-      return Math.abs(this.getAktuellerTagVergleich().differenzSkaliert) < 0.01;
+      return Math.abs(this.getAktuellerTagVergleich().differenz) < 0.01;
     },
 
     getTagVergleichDifferenzAbs() {
-      return Math.abs(this.getAktuellerTagVergleich().differenzSkaliert);
+      return Math.abs(this.getAktuellerTagVergleich().differenz);
     },
 
     async saveDayField(field, value) {
@@ -1143,14 +1145,21 @@ function preisRundenApp() {
     },
     rundeKategorieRowSeq: 0,
 
-    createRundeKategorieRow(kategorieId, anzahl, anzahlMin = 0, anzahlMax = 999) {
+    createRundeKategorieRow(kategorieId, anzahlMin = 0, anzahlMax = 999, anzahl = null) {
       this.rundeKategorieRowSeq += 1;
+      const min = Math.max(0, parseInt(anzahlMin) || 0);
+      const max = Math.max(min, parseInt(anzahlMax) || min);
+      const zielAnzahlRaw = anzahl === null || anzahl === undefined ? min : parseInt(anzahl);
+      const zielAnzahl = Number.isFinite(zielAnzahlRaw)
+        ? Math.min(max, Math.max(min, zielAnzahlRaw))
+        : min;
       return {
         rowKey: `rk-${this.rundeKategorieRowSeq}`,
         kategorieId: kategorieId === null || kategorieId === undefined ? "" : String(kategorieId),
-        anzahl: anzahl ?? 0,
-        anzahlMin: anzahlMin ?? 0,
-        anzahlMax: anzahlMax ?? 999,
+        // anzahl bleibt als Zielwert fuer bestehende Flows erhalten.
+        anzahl: zielAnzahl,
+        anzahlMin: min,
+        anzahlMax: max,
       };
     },
 
@@ -1185,7 +1194,6 @@ function preisRundenApp() {
         this.createRundeKategorieRow(
           kk.kategorie_id,
           kk.anzahl_min ?? 0,
-          kk.anzahl_min ?? 0,
           kk.anzahl_max ?? 999
         )
       );
@@ -1204,7 +1212,7 @@ function preisRundenApp() {
     },
 
     addKategorieToRunde() {
-      this.newRunde.kategorien.push(this.createRundeKategorieRow(null, 0, 0, 999));
+      this.newRunde.kategorien.push(this.createRundeKategorieRow(null, 0, 999));
     },
 
     async onKategorieChanged(index, valueOrEvent) {
@@ -1227,11 +1235,13 @@ function preisRundenApp() {
         } else {
           kat.anzahlMin = 0;
           kat.anzahlMax = 999;
+          kat.anzahl = Math.max(0, parseInt(kat.anzahl) || 0);
         }
       } else {
         const kat = this.newRunde.kategorien[index];
         kat.anzahlMin = 0;
         kat.anzahlMax = 999;
+        kat.anzahl = Math.max(0, parseInt(kat.anzahl) || 0);
       }
     },
 
@@ -1297,8 +1307,16 @@ function preisRundenApp() {
       }
 
       for (const kat of this.newRunde.kategorien) {
-        const anzahl = parseInt(kat.anzahl);
-        if (!kat.kategorieId || !Number.isFinite(anzahl) || anzahl < 0) {
+        const anzahlMin = parseInt(kat.anzahlMin);
+        const anzahlMax = parseInt(kat.anzahlMax);
+        if (
+          !kat.kategorieId ||
+          !Number.isFinite(anzahlMin) ||
+          !Number.isFinite(anzahlMax) ||
+          anzahlMin < 0 ||
+          anzahlMax < 0 ||
+          anzahlMax < anzahlMin
+        ) {
           this.newRundeErrors.form = "Bitte füllen Sie alle Kategorien vollständig aus.";
           return;
         }
@@ -1332,7 +1350,13 @@ function preisRundenApp() {
             ausgaben,
             this.newRunde.kategorien.map(kat => ({
               kategorieId: parseInt(kat.kategorieId),
-              anzahl: parseInt(kat.anzahl)
+              anzahlMin: Math.max(0, parseInt(kat.anzahlMin) || 0),
+              anzahlMax: Math.max(
+                Math.max(0, parseInt(kat.anzahlMin) || 0),
+                parseInt(kat.anzahlMax) || 0
+              ),
+              // Fallback fuer bestehende Logik in DB/Exports
+              anzahl: Math.max(0, parseInt(kat.anzahlMin) || 0)
             })),
             priceAmountProRunde
           );
@@ -1432,6 +1456,7 @@ function preisRundenApp() {
       
       // Lade gewählte Preise der Runde
       this.rundePreise = await window.electronAPI.getRundenPreise(this.aktuelleRunde.id);
+      await this.syncAusgabenFromRundePreise();
       
       // Lade alle verfügbaren Preise
       this.verfuegbarePreise = await window.electronAPI.getAllPreise();
@@ -1589,8 +1614,39 @@ function preisRundenApp() {
           return;
         }
         await window.electronAPI.updateRundenPreisAnzahl(rp.id, anzahl);
+        await this.loadRundeEditorData();
       } catch (error) {
         console.error("Fehler beim Aktualisieren der Anzahl:", error);
+      }
+    },
+
+    async syncAusgabenFromRundePreise() {
+      if (!this.aktuelleRunde) return;
+      const neueAusgaben = Math.round(this.getRundeGesamtsumme() * 100) / 100;
+      const aktuelleAusgaben = Math.round(this.parseOptionalNumber(this.aktuelleRunde.ausgaben) * 100) / 100;
+      if (neueAusgaben === aktuelleAusgaben) return;
+
+      this.aktuelleRunde.ausgaben = neueAusgaben;
+      try {
+        const einnahmen = Math.max(0, this.parseOptionalNumber(this.aktuelleRunde.einnahmen));
+        const priceAmount = Math.max(0, this.parseOptionalNumber(this.aktuelleRunde.price_amount));
+        await window.electronAPI.updateRunde(
+          this.aktuelleRunde.id,
+          einnahmen,
+          neueAusgaben,
+          priceAmount
+        );
+
+        if (this.aktuellerLottoTag && this.rundenProTag[this.aktuellerLottoTag]) {
+          const idx = this.rundenProTag[this.aktuellerLottoTag].findIndex(
+            (r) => r.id === this.aktuelleRunde.id
+          );
+          if (idx >= 0) {
+            this.rundenProTag[this.aktuellerLottoTag][idx].ausgaben = neueAusgaben;
+          }
+        }
+      } catch (error) {
+        console.error("Fehler beim automatischen Ausgaben-Update:", error);
       }
     },
 

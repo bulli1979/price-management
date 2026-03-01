@@ -41,6 +41,7 @@ import {
   removePreisVonRunde,
   removePreisVonRundeById,
   updateRundenKategorie,
+  updateRundenKategorieRange,
   updateRundenPreisAnzahl,
   updateRunde,
   clearRundenPreise,
@@ -304,6 +305,18 @@ ipcMain.handle("update-runde", async (event, id, einnahmen, ausgaben, priceAmoun
 ipcMain.handle("update-runden-kategorie", async (event, rundeId, kategorieId, anzahl) => {
   return await updateRundenKategorie(rundeId, kategorieId, anzahl);
 });
+
+ipcMain.handle(
+  "update-runden-kategorie-range",
+  async (event, rundeId, kategorieId, anzahlMin, anzahlMax) => {
+    return await updateRundenKategorieRange(
+      rundeId,
+      kategorieId,
+      anzahlMin,
+      anzahlMax
+    );
+  }
+);
 
 ipcMain.handle("clear-runden-preise", async (event, rundeId) => {
   return await clearRundenPreise(rundeId);

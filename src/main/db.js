@@ -317,6 +317,8 @@ export async function initDatabase() {
             runde_id INTEGER NOT NULL,
             kategorie_id INTEGER NOT NULL,
             anzahl INTEGER NOT NULL DEFAULT 1,
+            anzahl_min INTEGER NOT NULL DEFAULT 0,
+            anzahl_max INTEGER NOT NULL DEFAULT 999,
             FOREIGN KEY (runde_id) REFERENCES runden (id) ON DELETE CASCADE,
             FOREIGN KEY (kategorie_id) REFERENCES kategorien (id)
           )
@@ -324,8 +326,13 @@ export async function initDatabase() {
         for (const row of oldKatData) {
           const valid = await db.get("SELECT id FROM runden WHERE id = ?", [row.runde_id]);
           if (valid) {
-            await db.run("INSERT INTO runden_kategorien (runde_id, kategorie_id, anzahl) VALUES (?, ?, ?)",
-              [row.runde_id, row.kategorie_id, row.anzahl]);
+            const anzahl = Math.max(0, parseInt(row.anzahl) || 0);
+            const anzahlMin = Math.max(0, parseInt(row.anzahl_min) || anzahl);
+            const anzahlMax = Math.max(anzahlMin, parseInt(row.anzahl_max) || anzahlMin);
+            await db.run(
+              "INSERT INTO runden_kategorien (runde_id, kategorie_id, anzahl, anzahl_min, anzahl_max) VALUES (?, ?, ?, ?, ?)",
+              [row.runde_id, row.kategorie_id, anzahl, anzahlMin, anzahlMax]
+            );
           }
         }
         console.log("runden_kategorien neu erstellt");
@@ -337,10 +344,27 @@ export async function initDatabase() {
           runde_id INTEGER NOT NULL,
           kategorie_id INTEGER NOT NULL,
           anzahl INTEGER NOT NULL DEFAULT 1,
+          anzahl_min INTEGER NOT NULL DEFAULT 0,
+          anzahl_max INTEGER NOT NULL DEFAULT 999,
           FOREIGN KEY (runde_id) REFERENCES runden (id) ON DELETE CASCADE,
           FOREIGN KEY (kategorie_id) REFERENCES kategorien (id)
         )
       `);
+    }
+
+    // Migration: Von/Bis-Spalten fuer Runden-Kategorien ergaenzen (falls alte DB).
+    const rkColumns = await db.all("PRAGMA table_info(runden_kategorien)");
+    const hasAnzahlMin = rkColumns.some((c) => c.name === "anzahl_min");
+    const hasAnzahlMax = rkColumns.some((c) => c.name === "anzahl_max");
+    if (!hasAnzahlMin) {
+      await db.exec("ALTER TABLE runden_kategorien ADD COLUMN anzahl_min INTEGER NOT NULL DEFAULT 0");
+      await db.exec("UPDATE runden_kategorien SET anzahl_min = CASE WHEN anzahl < 0 THEN 0 ELSE anzahl END");
+    }
+    if (!hasAnzahlMax) {
+      await db.exec("ALTER TABLE runden_kategorien ADD COLUMN anzahl_max INTEGER NOT NULL DEFAULT 999");
+      await db.exec(
+        "UPDATE runden_kategorien SET anzahl_max = CASE WHEN anzahl_min > anzahl THEN anzahl_min ELSE anzahl END"
+      );
     }
 
     // Runden-Preise: Drop und Neuerstellen falls Struktur veraltet
@@ -702,9 +726,12 @@ export async function createRunde(lottoDayId, rundennummer, datum, einnahmen, au
 
   // Kategorien zur Runde hinzufügen
   for (const kat of kategorien) {
+    const anzahlMin = Math.max(0, parseInt(kat.anzahlMin) || 0);
+    const anzahlMax = Math.max(anzahlMin, parseInt(kat.anzahlMax) || anzahlMin);
+    const anzahl = Math.max(anzahlMin, Math.min(anzahlMax, parseInt(kat.anzahl) || anzahlMin));
     await database.run(
-      "INSERT INTO runden_kategorien (runde_id, kategorie_id, anzahl) VALUES (?, ?, ?)",
-      [rundeId, kat.kategorieId, kat.anzahl]
+      "INSERT INTO runden_kategorien (runde_id, kategorie_id, anzahl, anzahl_min, anzahl_max) VALUES (?, ?, ?, ?, ?)",
+      [rundeId, kat.kategorieId, anzahl, anzahlMin, anzahlMax]
     );
   }
 
@@ -751,6 +778,29 @@ export async function updateRundenKategorie(rundeId, kategorieId, anzahl) {
   await database.run(
     "UPDATE runden_kategorien SET anzahl = ? WHERE runde_id = ? AND kategorie_id = ?",
     [anzahl, rundeId, kategorieId]
+  );
+}
+
+export async function updateRundenKategorieRange(
+  rundeId,
+  kategorieId,
+  anzahlMin,
+  anzahlMax
+) {
+  const database = await getDatabase();
+  const min = Math.max(0, parseInt(anzahlMin) || 0);
+  const max = Math.max(min, parseInt(anzahlMax) || min);
+  await database.run(
+    `UPDATE runden_kategorien
+     SET anzahl_min = ?,
+         anzahl_max = ?,
+         anzahl = CASE
+           WHEN anzahl < ? THEN ?
+           WHEN anzahl > ? THEN ?
+           ELSE anzahl
+         END
+     WHERE runde_id = ? AND kategorie_id = ?`,
+    [min, max, min, min, max, max, rundeId, kategorieId]
   );
 }
 
@@ -931,22 +981,25 @@ export async function generateRundenPreise(rundeId, zielsumme) {
     };
   }
 
-  // Berechne Gesamtanzahl aller Preise
-  const gesamtAnzahl = rundenKategorien.reduce(
-    (sum, rk) => sum + Math.max(0, parseInt(rk.anzahl) || 0),
-    0
-  );
+  // Berechne Plan-Anzahl für Budgetverteilung (Mittelwert aus Von/Bis je Kategorie).
+  const gesamtAnzahl = rundenKategorien.reduce((sum, rk) => {
+    const { min, max } = normalizeKategorieRange(rk);
+    return sum + (min + max) / 2;
+  }, 0);
   
   const ausgewaehltePreise = [];
   const bereitsGewaehlt = new Set();
   let verbleibendesBudget = sanitizedZielsumme;
+  const gesamtMinBudget = berechneGesamtMinBudget(rundenKategorien, kategoriePreise);
+  const minPriorisiertMoeglich = gesamtMinBudget <= sanitizedZielsumme;
   
   // Für jede Kategorie Preise auswählen
-  for (const rk of rundenKategorien) {
+  for (let idx = 0; idx < rundenKategorien.length; idx += 1) {
+    const rk = rundenKategorien[idx];
     const { preferred, all } = kategoriePreise[rk.kategorie_id];
-    const gewuenschteAnzahl = Math.max(0, parseInt(rk.anzahl) || 0);
+    const { min: kategorieMin, max: kategorieMax } = normalizeKategorieRange(rk);
 
-    if (gewuenschteAnzahl === 0) {
+    if (kategorieMax === 0) {
       await updateRundenKategorie(rundeId, rk.kategorie_id, 0);
       continue;
     }
@@ -957,9 +1010,10 @@ export async function generateRundenPreise(rundeId, zielsumme) {
     }
 
     // Anteilige Zielsumme basierend auf Anzahl
+    const planAnzahl = (kategorieMin + kategorieMax) / 2;
     const zielSummeKat = Math.min(
       verbleibendesBudget,
-      gesamtAnzahl > 0 ? (sanitizedZielsumme / gesamtAnzahl) * gewuenschteAnzahl : 0
+      gesamtAnzahl > 0 ? (sanitizedZielsumme / gesamtAnzahl) * planAnzahl : 0
     );
     
     // Bevorzuge einzigartige Preise, erlaube aber Duplikate als Fallback
@@ -967,10 +1021,10 @@ export async function generateRundenPreise(rundeId, zielsumme) {
     const uniqueAll = all.filter(p => !bereitsGewaehlt.has(p.id));
     
     let pool;
-    if (uniquePreferred.length >= gewuenschteAnzahl) {
+    if (uniquePreferred.length >= kategorieMax) {
       // Genug einzigartige, nicht am selben Tag verwendete Preise
       pool = uniquePreferred;
-    } else if (uniqueAll.length >= gewuenschteAnzahl) {
+    } else if (uniqueAll.length >= kategorieMax) {
       // Genug einzigartige Preise (evtl. am selben Tag schon verwendet)
       pool = uniqueAll;
     } else {
@@ -984,9 +1038,21 @@ export async function generateRundenPreise(rundeId, zielsumme) {
     }
 
     const minPreis = Math.min(...pool.map((p) => p.preis));
+    const reserveRest = minPriorisiertMoeglich
+      ? berechneRestMinBudget(rundenKategorien, kategoriePreise, idx + 1)
+      : 0;
+    const budgetFuerKategorie = Math.max(0, verbleibendesBudget - reserveRest);
     const maxBezahlbareAnzahl =
-      minPreis > 0 ? Math.floor(verbleibendesBudget / minPreis) : gewuenschteAnzahl;
-    const effektiveAnzahl = Math.max(0, Math.min(gewuenschteAnzahl, maxBezahlbareAnzahl));
+      minPreis > 0 ? Math.floor(budgetFuerKategorie / minPreis) : kategorieMax;
+    const minSoll = Math.max(0, Math.min(kategorieMin, maxBezahlbareAnzahl));
+    const dynamischeAnzahl = chooseDynamicKategorieAnzahl({
+      min: kategorieMin,
+      max: kategorieMax,
+      maxBezahlbar: maxBezahlbareAnzahl,
+      zielSummeKat,
+      preisePool: pool,
+    });
+    const effektiveAnzahl = Math.max(minSoll, dynamischeAnzahl);
 
     if (effektiveAnzahl === 0) {
       await updateRundenKategorie(rundeId, rk.kategorie_id, 0);
@@ -996,8 +1062,32 @@ export async function generateRundenPreise(rundeId, zielsumme) {
     let selected = selectPreiseGleichverteilt(pool, effektiveAnzahl, zielSummeKat);
     selected = selected.slice(0, effektiveAnzahl);
 
-    // Hartes Budget-Limit: niemals über verbleibendes Budget dieser Runde gehen.
-    while (selected.length > 0 && selected.reduce((sum, p) => sum + p.preis, 0) > verbleibendesBudget) {
+    // Mindestmenge bevorzugen; danach strikt im Budget bleiben.
+    const minSollBudget = minPriorisiertMoeglich ? Math.min(minSoll, selected.length) : 0;
+    while (
+      selected.length > minSollBudget &&
+      selected.reduce((sum, p) => sum + p.preis, 0) > budgetFuerKategorie
+    ) {
+      selected.sort((a, b) => b.preis - a.preis);
+      selected.shift();
+    }
+
+    // Falls die Auswahl mit Mindestmenge noch zu teuer ist: billigste Variante versuchen.
+    while (
+      selected.length > minSollBudget &&
+      selected.reduce((sum, p) => sum + p.preis, 0) > budgetFuerKategorie
+    ) {
+      selected = [...pool]
+        .sort((a, b) => a.preis - b.preis)
+        .slice(0, selected.length);
+      selected = selected.slice(0, selected.length - 1);
+    }
+
+    // Letzte Sicherheitsstufe: Budget niemals überschreiten.
+    while (
+      selected.length > minSollBudget &&
+      selected.reduce((sum, p) => sum + p.preis, 0) > budgetFuerKategorie
+    ) {
       selected.sort((a, b) => b.preis - a.preis);
       selected.shift();
     }
@@ -1042,6 +1132,10 @@ export async function generateRundenPreise(rundeId, zielsumme) {
   // Berechne tatsächliche Summe (Einzelpreis * Anzahl)
   const rundenPreise = await getRundenPreise(rundeId);
   const tatsaechlicheSumme = rundenPreise.reduce((sum, p) => sum + (p.preis * (p.rp_anzahl || 1)), 0);
+  await database.run(
+    "UPDATE runden SET ausgaben = ? WHERE id = ?",
+    [tatsaechlicheSumme, rundeId]
+  );
 
   return {
     success: true,
@@ -1049,6 +1143,57 @@ export async function generateRundenPreise(rundeId, zielsumme) {
     zielsumme: sanitizedZielsumme,
     tatsaechlicheSumme: tatsaechlicheSumme
   };
+}
+
+function normalizeKategorieRange(rk) {
+  const fallback = Math.max(0, parseInt(rk.anzahl) || 0);
+  const min = Math.max(0, parseInt(rk.anzahl_min) || fallback);
+  const maxRaw = parseInt(rk.anzahl_max);
+  const max = Number.isFinite(maxRaw) ? Math.max(min, maxRaw) : Math.max(min, fallback);
+  return { min, max };
+}
+
+function berechneGesamtMinBudget(rundenKategorien, kategoriePreise) {
+  return rundenKategorien.reduce((sum, rk) => {
+    const { min } = normalizeKategorieRange(rk);
+    if (min === 0) return sum;
+    const all = (kategoriePreise[rk.kategorie_id] || {}).all || [];
+    if (all.length === 0) return sum;
+    const billigster = Math.min(...all.map((p) => p.preis));
+    return sum + Math.max(0, billigster) * min;
+  }, 0);
+}
+
+function berechneRestMinBudget(rundenKategorien, kategoriePreise, startIndex) {
+  let rest = 0;
+  for (let i = startIndex; i < rundenKategorien.length; i += 1) {
+    const rk = rundenKategorien[i];
+    const { min } = normalizeKategorieRange(rk);
+    if (min === 0) continue;
+    const all = (kategoriePreise[rk.kategorie_id] || {}).all || [];
+    if (all.length === 0) continue;
+    const billigster = Math.min(...all.map((p) => p.preis));
+    rest += Math.max(0, billigster) * min;
+  }
+  return rest;
+}
+
+function chooseDynamicKategorieAnzahl({ min, max, maxBezahlbar, zielSummeKat, preisePool }) {
+  const obereGrenze = Math.max(0, Math.min(max, maxBezahlbar));
+  if (obereGrenze === 0) return 0;
+
+  // Budget hat Prioritaet: wenn das Minimum nicht finanzierbar ist, so viel wie moeglich nehmen.
+  if (obereGrenze < min) return obereGrenze;
+
+  const preisSumme = preisePool.reduce((sum, p) => sum + (Number(p.preis) || 0), 0);
+  const durchschnitt = preisSumme > 0 ? preisSumme / preisePool.length : 0;
+  const zielAnzahl = durchschnitt > 0
+    ? Math.max(min, Math.min(obereGrenze, Math.round(zielSummeKat / durchschnitt)))
+    : min;
+
+  // Dynamik: leichte Zufallskomponente innerhalb der Range, aber nahe am Ziel.
+  const randomAnzahl = min + Math.floor(Math.random() * (obereGrenze - min + 1));
+  return Math.max(min, Math.min(obereGrenze, Math.round((zielAnzahl + randomAnzahl) / 2)));
 }
 
 // Hilfsfunktion: Preise gleichverteilt auswählen (basierend auf Einzelpreis)
@@ -1181,9 +1326,12 @@ export async function importAllData(jsonData) {
     // Runden-Kategorien importieren
     if (d.runden_kategorien) {
       for (const row of d.runden_kategorien) {
+        const anzahl = Math.max(0, parseInt(row.anzahl) || 0);
+        const anzahlMin = Math.max(0, parseInt(row.anzahl_min) || anzahl);
+        const anzahlMax = Math.max(anzahlMin, parseInt(row.anzahl_max) || anzahlMin);
         await database.run(
-          "INSERT INTO runden_kategorien (id, runde_id, kategorie_id, anzahl) VALUES (?, ?, ?, ?)",
-          [row.id, row.runde_id, row.kategorie_id, row.anzahl]
+          "INSERT INTO runden_kategorien (id, runde_id, kategorie_id, anzahl, anzahl_min, anzahl_max) VALUES (?, ?, ?, ?, ?, ?)",
+          [row.id, row.runde_id, row.kategorie_id, anzahl, anzahlMin, anzahlMax]
         );
       }
     }

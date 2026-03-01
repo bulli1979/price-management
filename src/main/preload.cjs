@@ -132,6 +132,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("update-runde", id, einnahmen, ausgaben, priceAmount),
   updateRundenKategorie: (rundeId, kategorieId, anzahl) =>
     ipcRenderer.invoke("update-runden-kategorie", rundeId, kategorieId, anzahl),
+  updateRundenKategorieRange: (rundeId, kategorieId, anzahlMin, anzahlMax) =>
+    ipcRenderer.invoke(
+      "update-runden-kategorie-range",
+      rundeId,
+      kategorieId,
+      anzahlMin,
+      anzahlMax
+    ),
 
   clearRundenPreise: (rundeId) =>
     ipcRenderer.invoke("clear-runden-preise", rundeId),
