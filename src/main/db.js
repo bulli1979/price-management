@@ -1105,7 +1105,7 @@ export async function addPreisZuRunde(rundeId, preisId, kategorieId, rundenTitel
     const current = Math.max(0, parseInt(existing.anzahl) || 0);
     const next = Math.min(maxMoeglich, current + 1);
     if (next <= current) {
-      throw new Error("Maximale Verfügbarkeit erreicht.");
+      return existing.id;
     }
     await database.run("UPDATE runden_preise SET anzahl = ? WHERE id = ?", [next, existing.id]);
     return existing.id;
@@ -1113,7 +1113,7 @@ export async function addPreisZuRunde(rundeId, preisId, kategorieId, rundenTitel
 
   const maxMoeglich = await getMaxVerfuegbareAnzahlFuerPreisInRunde(rundeId, preisId, null);
   if (maxMoeglich < 1) {
-    throw new Error("Maximale Verfügbarkeit erreicht.");
+    return null;
   }
 
   const result = await database.run(

@@ -36,6 +36,21 @@
           <span class="text-sm text-gray-700">Lädt...</span>
         </div>
       </div>
+      <div
+        x-show="statusMessage"
+        x-transition.opacity
+        class="fixed top-16 right-4 z-[101] pointer-events-none"
+      >
+        <div
+          class="rounded-lg shadow-lg px-3 py-2 text-sm border"
+          :class="statusType === 'error'
+            ? 'bg-red-50 text-red-700 border-red-200'
+            : statusType === 'warning'
+              ? 'bg-amber-50 text-amber-800 border-amber-200'
+              : 'bg-blue-50 text-blue-700 border-blue-200'"
+          x-text="statusMessage"
+        ></div>
+      </div>
 
       <!-- ============================================== -->
       <!-- RUNDE EDITOR - Vollbild -->

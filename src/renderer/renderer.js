@@ -52,6 +52,9 @@ function preisRundenApp() {
     isLoading: false,
     loadingCount: 0,
     loadingStartedAt: 0,
+    statusMessage: "",
+    statusType: "info",
+    statusTimer: null,
 
     // Form data
     newPreis: {
@@ -424,6 +427,20 @@ function preisRundenApp() {
         style: "currency",
         currency: "CHF",
       }).format(amount);
+    },
+
+    showStatusMessage(message, type = "info", timeoutMs = 2600) {
+      this.statusMessage = String(message || "");
+      this.statusType = type || "info";
+      if (this.statusTimer) {
+        clearTimeout(this.statusTimer);
+        this.statusTimer = null;
+      }
+      this.statusTimer = setTimeout(() => {
+        this.statusMessage = "";
+        this.statusType = "info";
+        this.statusTimer = null;
+      }, Math.max(800, parseInt(timeoutMs) || 2600));
     },
 
     getGesamtsumme() {
@@ -1967,17 +1984,22 @@ function preisRundenApp() {
       }
       
       try {
-        await window.electronAPI.addPreisZuRunde(
+        const result = await window.electronAPI.addPreisZuRunde(
           this.aktuelleRunde.id,
           preis.id,
           kategorieId,
           rundenTitel,
           rundenSortOrder
         );
+        if (!result) {
+          // Bei maximaler Verfügbarkeit nur still aktualisieren, ohne blockierende Meldung.
+        }
         await this.loadRundeEditorData();
       } catch (error) {
         console.error("Fehler beim Hinzufügen:", error);
-        alert("Fehler: " + error.message);
+        this.showStatusMessage("Fehler beim Hinzufügen: " + error.message, "error", 3600);
+        this.loadingCount = 0;
+        this.isLoading = false;
       }
     },
 
@@ -1995,11 +2017,14 @@ function preisRundenApp() {
         }
         const gespeicherteAnzahl = await window.electronAPI.updateRundenPreisAnzahl(rp.id, anzahl);
         if (Number.isFinite(gespeicherteAnzahl) && gespeicherteAnzahl < anzahl) {
-          alert(`Maximale Verfügbarkeit erreicht. Es wurden ${gespeicherteAnzahl} gespeichert.`);
+          // Bei Limit still auf den maximal möglichen Wert begrenzen.
         }
         await this.loadRundeEditorData();
       } catch (error) {
         console.error("Fehler beim Aktualisieren der Anzahl:", error);
+        this.showStatusMessage("Fehler beim Aktualisieren der Anzahl.", "error", 3200);
+        this.loadingCount = 0;
+        this.isLoading = false;
       }
     },
 

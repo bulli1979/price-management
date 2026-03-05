@@ -75,6 +75,7 @@ import { createPdfService } from "./services/pdf-service.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const appIconPath = path.join(__dirname, "..", "renderer", "assets", "comic-pokal-app.png");
+const packagedWinIconPath = path.join(process.resourcesPath, "icon.ico");
 
 let mainWindow;
 const pdfService = createPdfService({
@@ -85,16 +86,21 @@ const pdfService = createPdfService({
 });
 
 function createWindow() {
-  mainWindow = new BrowserWindow({
+  const windowOptions = {
     width: 1200,
     height: 800,
-    icon: appIconPath,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, "preload.cjs"),
     },
-  });
+  };
+  if (process.platform === "win32" && app.isPackaged && fs.existsSync(packagedWinIconPath)) {
+    windowOptions.icon = packagedWinIconPath;
+  } else if (fs.existsSync(appIconPath)) {
+    windowOptions.icon = appIconPath;
+  }
+  mainWindow = new BrowserWindow(windowOptions);
 
   mainWindow.loadFile("src/renderer/index.html");
   mainWindow.maximize();

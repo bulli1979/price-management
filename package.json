@@ -14,7 +14,8 @@
     "appId": "com.preis-runden.app",
     "productName": "Preis-Runden App",
     "directories": {
-      "output": "dist"
+      "output": "dist",
+      "buildResources": "build"
     },
     "files": [
       "src/**/*",
@@ -27,6 +28,10 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "build/icon.ico",
+        "to": "icon.ico"
       }
     ],
     "win": {
@@ -44,13 +49,16 @@
           ]
         }
       ],
-      "icon": null
+      "icon": "icon.ico"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico",
+      "installerHeaderIcon": "icon.ico"
     },
     "asar": true,
     "asarUnpack": [
@@ -69,6 +77,7 @@
     "autoprefixer": "^10.4.21",
     "electron": "^40.6.1",
     "electron-builder": "^26.8.1",
+    "png-to-ico": "^3.0.1",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.16"
   }
