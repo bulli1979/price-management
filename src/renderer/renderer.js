@@ -25,6 +25,8 @@ function preisRundenApp() {
     showRegenerateConfirmModal: false,
     editingKonfig: { id: null, name: '' },
     editingKonfigKategorien: [],
+    editingKonfigRunden: [],
+    newKonfigRundeTitel: "",
     newKonfig: { name: '' },
     newKonfigKategorie: { kategorieId: null, anzahlMin: 1, anzahlMax: 10 },
 
@@ -35,13 +37,18 @@ function preisRundenApp() {
     rundeDraftEinnahmen: "",
     rundeDraftAusgaben: "",
     rundeDraftPriceAmount: "",
+    rundeDraftAdditionalTitleText: "",
     rundeDraftKategorien: [],
+    newRundeConfigRundenPreview: [],
+    newRundePriceAmountManuallyEdited: false,
     verbrauchtePreise: {},
     preisHistorie: [],
     preisFilter: "",
     kategorieFilter: "",
+    selectedRundenTitelForManualAdd: "__AUTO__",
     draggedPreis: null,
     dragOverLeft: false,
+    dragOverRundenTitel: null,
     isLoading: false,
     loadingCount: 0,
     loadingStartedAt: 0,
@@ -541,6 +548,19 @@ function preisRundenApp() {
       }
     },
 
+    async deleteRundeFromLottoDay(rundeId) {
+      if (!confirm("Möchten Sie diese Runde wirklich löschen?")) return;
+      if (!this.aktuellesLotto?.id) return;
+      try {
+        await window.electronAPI.deleteRunde(rundeId);
+        await this.loadLottoDays(this.aktuellesLotto.id);
+        await this.loadPreisHistorie();
+      } catch (error) {
+        console.error("Fehler beim Löschen der Runde:", error);
+        alert("Fehler: " + error.message);
+      }
+    },
+
     async switchLottoDay(dayNumber) {
       this.aktuellerLottoTag = dayNumber;
       if (!this.rundenProTag[dayNumber]) {
@@ -618,9 +638,67 @@ function preisRundenApp() {
       return this.aktuellerLottoTag ?? "";
     },
 
+    getAktuelleRundeTitelLabel() {
+      if (!this.aktuelleRunde || !this.aktuelleRunde.titel) return "";
+      return `- ${this.aktuelleRunde.titel}`;
+    },
+
     getAktuelleRundeKategorienList() {
       if (!this.aktuelleRunde || !Array.isArray(this.aktuelleRunde.kategorien)) return [];
       return this.aktuelleRunde.kategorien;
+    },
+
+    getAktuelleRundeKategorienByTitelEntries() {
+      const groups = {};
+      for (const kat of this.getAktuelleRundeKategorienList()) {
+        const titel = kat.runden_titel || "Ohne Rundentitel";
+        if (!groups[titel]) groups[titel] = { sortOrder: Number.MAX_SAFE_INTEGER, items: [] };
+        const katSortOrder = parseInt(kat.runden_sort_order);
+        if (Number.isFinite(katSortOrder)) {
+          groups[titel].sortOrder = Math.min(groups[titel].sortOrder, katSortOrder);
+        }
+        groups[titel].items.push(kat);
+      }
+      return Object.entries(groups)
+        .sort((a, b) => {
+          const bySortOrder = (a[1].sortOrder || 0) - (b[1].sortOrder || 0);
+          if (bySortOrder !== 0) return bySortOrder;
+          return String(a[0]).localeCompare(String(b[0]), "de");
+        })
+        .map(([titel, group]) => {
+          const sortedItems = Array.from(group.items).sort((a, b) => {
+            const bySort = (parseInt(a.runden_sort_order) || 0) - (parseInt(b.runden_sort_order) || 0);
+            if (bySort !== 0) return bySort;
+            return String(a.kategorie_name || "").localeCompare(String(b.kategorie_name || ""), "de");
+          });
+          return [titel, sortedItems];
+        });
+    },
+
+    getAktuelleRundenTitelOptionen() {
+      return this.getAktuelleRundeKategorienByTitelEntries().map(([titel]) => titel);
+    },
+
+    getRundeTitelSortOrderMap() {
+      const map = new Map();
+      for (const kat of this.getAktuelleRundeKategorienList()) {
+        const titel = kat.runden_titel || "Ohne Rundentitel";
+        const sortOrder = parseInt(kat.runden_sort_order);
+        if (!Number.isFinite(sortOrder)) continue;
+        if (!map.has(titel)) {
+          map.set(titel, sortOrder);
+          continue;
+        }
+        map.set(titel, Math.min(map.get(titel), sortOrder));
+      }
+      return map;
+    },
+
+    getAktuelleTagRundenTitelList() {
+      return this.getAktuellerTagRundenList().map((r) => ({
+        id: r.id,
+        label: `Spielrunde ${r.rundennummer}${r.titel ? `: ${r.titel}` : ""}`,
+      }));
     },
 
     hasAktuelleRundeKategorien() {
@@ -675,6 +753,29 @@ function preisRundenApp() {
 
     getRundePreiseGroupedEntries() {
       return Object.entries(this.getRundePreiseGrouped());
+    },
+
+    getRundePreiseByKonfigRundeEntries() {
+      const groups = {};
+      const titleSortMap = this.getRundeTitelSortOrderMap();
+      for (const rp of this.rundePreise) {
+        const section = rp.runden_titel || "Ohne Rundentitel";
+        if (!groups[section]) groups[section] = { sortOrder: Number.MAX_SAFE_INTEGER, items: [] };
+        const rpSort = parseInt(rp.runden_sort_order);
+        if (Number.isFinite(rpSort)) {
+          groups[section].sortOrder = Math.min(groups[section].sortOrder, rpSort);
+        } else if (titleSortMap.has(section)) {
+          groups[section].sortOrder = Math.min(groups[section].sortOrder, titleSortMap.get(section));
+        }
+        groups[section].items.push(rp);
+      }
+      return Object.entries(groups)
+        .sort((a, b) => {
+          const bySortOrder = (a[1].sortOrder || 0) - (b[1].sortOrder || 0);
+          if (bySortOrder !== 0) return bySortOrder;
+          return String(a[0]).localeCompare(String(b[0]), "de");
+        })
+        .map(([section, group]) => [section, group.items]);
     },
 
     getRundeDiffClass() {
@@ -1023,6 +1124,7 @@ function preisRundenApp() {
         this.konfigurationen = await window.electronAPI.getAllKonfigurationen();
         for (const config of this.konfigurationen) {
           config._kategorien = await window.electronAPI.getKonfigurationKategorien(config.id);
+          config._runden = await window.electronAPI.getKonfigurationRunden(config.id);
         }
       } catch (error) {
         console.error("Fehler beim Laden der Konfigurationen:", error);
@@ -1056,7 +1158,9 @@ function preisRundenApp() {
     async editKonfiguration(config) {
       this.editingKonfig = { id: config.id, name: config.name };
       this.editingKonfigKategorien = await window.electronAPI.getKonfigurationKategorien(config.id);
+      await this.reloadEditingKonfigRunden();
       this.newKonfigKategorie = { kategorieId: null, anzahlMin: 1, anzahlMax: 10 };
+      this.newKonfigRundeTitel = "";
       this.showEditKonfigModal = true;
     },
 
@@ -1101,11 +1205,159 @@ function preisRundenApp() {
 
     async updateKonfigKategorie(kk) {
       try {
+        const min = Math.max(0, parseInt(kk.anzahl_min) || 0);
+        const max = Math.max(min, parseInt(kk.anzahl_max) || min);
+        kk.anzahl_min = min;
+        kk.anzahl_max = max;
         await window.electronAPI.updateKonfigurationKategorie(
-          this.editingKonfig.id, kk.kategorie_id, kk.anzahl_min, kk.anzahl_max
+          this.editingKonfig.id, kk.kategorie_id, min, max
         );
       } catch (error) {
         console.error("Fehler beim Aktualisieren der Kategorie:", error);
+        alert("Fehler: " + error.message);
+      }
+    },
+
+    getKonfigRunden(config) {
+      if (!config || !Array.isArray(config._runden)) return [];
+      return config._runden;
+    },
+
+    async reloadEditingKonfigRunden() {
+      if (!this.editingKonfig?.id) {
+        this.editingKonfigRunden = [];
+        return;
+      }
+      const runden = await window.electronAPI.getKonfigurationRunden(this.editingKonfig.id);
+      const enriched = [];
+      for (const r of runden) {
+        const kategorien = await window.electronAPI.getKonfigurationRundenKategorien(r.id);
+        enriched.push({
+          ...r,
+          _kategorien: kategorien,
+          _newKategorieId: "",
+          _newAnzahlMin: 1,
+          _newAnzahlMax: 1,
+        });
+      }
+      this.editingKonfigRunden = enriched;
+    },
+
+    getAvailableKategorienForKonfigRunde(runde) {
+      const selected = new Set((runde?._kategorien || []).map((k) => k.kategorie_id));
+      return this.kategorien.filter((k) => !selected.has(k.id));
+    },
+
+    async addKonfigRunde() {
+      if (!this.editingKonfig?.id) return;
+      try {
+        const titel = (this.newKonfigRundeTitel || "").trim() || `Runde ${this.editingKonfigRunden.length + 1}`;
+        await window.electronAPI.addKonfigurationRunde(
+          this.editingKonfig.id,
+          titel,
+          this.editingKonfigRunden.length
+        );
+        this.newKonfigRundeTitel = "";
+        await this.reloadEditingKonfigRunden();
+      } catch (error) {
+        console.error("Fehler beim Hinzufügen der Konfig-Runde:", error);
+        alert("Fehler: " + error.message);
+      }
+    },
+
+    async saveKonfigRunde(runde) {
+      try {
+        const titel = (runde.titel || "").trim();
+        if (!titel) {
+          alert("Bitte einen Rundentitel eingeben.");
+          return;
+        }
+        await window.electronAPI.updateKonfigurationRunde(runde.id, titel, runde.sort_order || 0);
+      } catch (error) {
+        console.error("Fehler beim Speichern der Konfig-Runde:", error);
+        alert("Fehler: " + error.message);
+      }
+    },
+
+    async moveKonfigRunde(rundeId, direction) {
+      const index = this.editingKonfigRunden.findIndex((r) => r.id === rundeId);
+      if (index < 0) return;
+      const targetIndex = direction === "up" ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= this.editingKonfigRunden.length) return;
+
+      const swapped = [...this.editingKonfigRunden];
+      const temp = swapped[index];
+      swapped[index] = swapped[targetIndex];
+      swapped[targetIndex] = temp;
+
+      try {
+        for (let i = 0; i < swapped.length; i += 1) {
+          const r = swapped[i];
+          await window.electronAPI.updateKonfigurationRunde(
+            r.id,
+            (r.titel || "").trim() || `Runde ${i + 1}`,
+            i
+          );
+        }
+        await this.reloadEditingKonfigRunden();
+      } catch (error) {
+        console.error("Fehler beim Sortieren der Konfig-Runden:", error);
+        alert("Fehler: " + error.message);
+      }
+    },
+
+    async deleteKonfigRunde(rundeId) {
+      if (!confirm("Runde wirklich löschen?")) return;
+      try {
+        await window.electronAPI.deleteKonfigurationRunde(rundeId);
+        await this.reloadEditingKonfigRunden();
+      } catch (error) {
+        console.error("Fehler beim Löschen der Konfig-Runde:", error);
+        alert("Fehler: " + error.message);
+      }
+    },
+
+    async addKategorieToKonfigRunde(runde) {
+      if (!runde || !runde._newKategorieId) return;
+      try {
+        await window.electronAPI.addKategorieZuKonfigurationRunde(
+          runde.id,
+          parseInt(runde._newKategorieId),
+          Math.max(0, parseInt(runde._newAnzahlMin) || 0),
+          Math.max(
+            Math.max(0, parseInt(runde._newAnzahlMin) || 0),
+            parseInt(runde._newAnzahlMax) || 0
+          )
+        );
+        runde._newKategorieId = "";
+        runde._newAnzahlMin = 1;
+        runde._newAnzahlMax = 1;
+        await this.reloadEditingKonfigRunden();
+      } catch (error) {
+        console.error("Fehler beim Hinzufügen einer Kategorie zur Konfig-Runde:", error);
+        alert("Fehler: " + error.message);
+      }
+    },
+
+    async updateKonfigRundeKategorie(kk) {
+      try {
+        const min = Math.max(0, parseInt(kk.anzahl_min) || 0);
+        const max = Math.max(min, parseInt(kk.anzahl_max) || min);
+        kk.anzahl_min = min;
+        kk.anzahl_max = max;
+        await window.electronAPI.updateKonfigurationRundeKategorie(kk.id, min, max);
+      } catch (error) {
+        console.error("Fehler beim Aktualisieren der Konfig-Runden-Kategorie:", error);
+        alert("Fehler: " + error.message);
+      }
+    },
+
+    async removeKategorieFromKonfigRunde(kkId) {
+      try {
+        await window.electronAPI.removeKategorieVonKonfigurationRunde(kkId);
+        await this.reloadEditingKonfigRunden();
+      } catch (error) {
+        console.error("Fehler beim Entfernen der Konfig-Runden-Kategorie:", error);
         alert("Fehler: " + error.message);
       }
     },
@@ -1173,29 +1425,40 @@ function preisRundenApp() {
       }
     },
 
+    async loadKonfigurationRundenMitKategorien(konfigurationId) {
+      if (!konfigurationId) return [];
+      try {
+        const runden = await window.electronAPI.getKonfigurationRunden(konfigurationId);
+        const enriched = [];
+        for (const r of runden) {
+          const kategorien = await window.electronAPI.getKonfigurationRundenKategorien(r.id);
+          enriched.push({ ...r, kategorien });
+        }
+        return enriched;
+      } catch (error) {
+        console.error("Fehler beim Laden der Konfig-Runden:", error);
+        return [];
+      }
+    },
+
     async applySelectedKonfigurationToRunde() {
       if (!this.newRunde.useConfig) {
         this.newRunde.kategorien = [];
+        this.newRundeConfigRundenPreview = [];
         return;
       }
 
       const configId = parseInt(this.newRunde.configId);
       if (!configId) {
         this.newRunde.kategorien = [];
+        this.newRundeConfigRundenPreview = [];
         return;
       }
-
-      const configKategorien = await this.loadKonfigurationKategorien(configId);
-      // Erst leeren, dann neu setzen -> zwingt Alpine zu sauberem Re-Render der Selects
+      const configRunden = await this.loadKonfigurationRundenMitKategorien(configId);
       this.newRunde.kategorien = [];
-      await this.$nextTick();
-
-      this.newRunde.kategorien = configKategorien.map((kk) =>
-        this.createRundeKategorieRow(
-          kk.kategorie_id,
-          kk.anzahl_min ?? 0,
-          kk.anzahl_max ?? 999
-        )
+      this.newRunde.gewinnrunden = Math.max(1, configRunden.length || 1);
+      this.newRundeConfigRundenPreview = configRunden.map((r, idx) =>
+        `Runde ${idx + 1}: ${r.titel || "Ohne Titel"}`
       );
     },
 
@@ -1252,8 +1515,19 @@ function preisRundenApp() {
     calculateAusgaben() {
       if (this.newRunde.einnahmen > 0) {
         this.newRunde.ausgaben = Math.round(this.newRunde.einnahmen / 2 * 100) / 100;
-        this.newRunde.priceAmount = this.newRunde.ausgaben;
+        const hasCustomValue =
+          this.newRundePriceAmountManuallyEdited &&
+          this.newRunde.priceAmount !== "" &&
+          this.newRunde.priceAmount !== null &&
+          this.newRunde.priceAmount !== undefined;
+        if (!hasCustomValue) {
+          this.newRunde.priceAmount = this.newRunde.ausgaben;
+        }
       }
+    },
+
+    onNewRundePriceAmountInput() {
+      this.newRundePriceAmountManuallyEdited = true;
     },
 
     clearNeueRundeErrors() {
@@ -1301,24 +1575,26 @@ function preisRundenApp() {
         return;
       }
 
-      if (this.newRunde.kategorien.length === 0) {
-        this.newRundeErrors.form = "Bitte wählen Sie mindestens eine Kategorie aus.";
-        return;
-      }
-
-      for (const kat of this.newRunde.kategorien) {
-        const anzahlMin = parseInt(kat.anzahlMin);
-        const anzahlMax = parseInt(kat.anzahlMax);
-        if (
-          !kat.kategorieId ||
-          !Number.isFinite(anzahlMin) ||
-          !Number.isFinite(anzahlMax) ||
-          anzahlMin < 0 ||
-          anzahlMax < 0 ||
-          anzahlMax < anzahlMin
-        ) {
-          this.newRundeErrors.form = "Bitte füllen Sie alle Kategorien vollständig aus.";
+      if (!this.newRunde.useConfig) {
+        if (this.newRunde.kategorien.length === 0) {
+          this.newRundeErrors.form = "Bitte wählen Sie mindestens eine Kategorie aus.";
           return;
+        }
+
+        for (const kat of this.newRunde.kategorien) {
+          const anzahlMin = parseInt(kat.anzahlMin);
+          const anzahlMax = parseInt(kat.anzahlMax);
+          if (
+            !kat.kategorieId ||
+            !Number.isFinite(anzahlMin) ||
+            !Number.isFinite(anzahlMax) ||
+            anzahlMin < 0 ||
+            anzahlMax < 0 ||
+            anzahlMax < anzahlMin
+          ) {
+            this.newRundeErrors.form = "Bitte füllen Sie alle Kategorien vollständig aus.";
+            return;
+          }
         }
       }
 
@@ -1334,13 +1610,70 @@ function preisRundenApp() {
           this.newRunde.priceAmount !== null &&
           this.newRunde.priceAmount !== undefined;
         const basisPreisAmount = hasExplicitPriceAmount ? priceAmount : ausgaben;
-        const priceAmountProRunde = basisPreisAmount / this.newRunde.gewinnrunden;
         let startRundennummer = await window.electronAPI.getNextRundennummer(day.id);
         const erstellteRunden = [];
+        let rundenDefinitionen = [];
 
-        for (let i = 0; i < this.newRunde.gewinnrunden; i++) {
+        if (this.newRunde.useConfig) {
+          const configRunden = await this.loadKonfigurationRundenMitKategorien(this.newRunde.configId);
+          const selectedConfig = this.konfigurationen.find(
+            (cfg) => parseInt(cfg.id) === parseInt(this.newRunde.configId)
+          );
+          const configTitel = selectedConfig?.name ? String(selectedConfig.name).trim() : null;
+          if (configRunden.length === 0) {
+            this.newRundeErrors.form = "Die gewählte Konfiguration enthält keine Runden.";
+            return;
+          }
+          for (const cfgR of configRunden) {
+            if (!cfgR.kategorien || cfgR.kategorien.length === 0) {
+              this.newRundeErrors.form = `Konfig-Runde "${cfgR.titel}" hat keine Kategorien.`;
+              return;
+            }
+          }
+          const mergedKategorien = [];
+          for (const cfgR of configRunden) {
+            for (const kat of cfgR.kategorien) {
+              mergedKategorien.push({
+                kategorieId: parseInt(kat.kategorie_id),
+                anzahlMin: Math.max(0, parseInt(kat.anzahl_min) || 0),
+                anzahlMax: Math.max(
+                  Math.max(0, parseInt(kat.anzahl_min) || 0),
+                  parseInt(kat.anzahl_max) || 0
+                ),
+                anzahl: Math.max(0, parseInt(kat.anzahl_min) || 0),
+                rundenTitel: cfgR.titel || null,
+                rundenSortOrder: parseInt(cfgR.sort_order) || 0,
+              });
+            }
+          }
+          rundenDefinitionen = [
+            {
+              titel: configTitel || configRunden.map((r) => r.titel).filter(Boolean).join(" / ") || null,
+              kategorien: mergedKategorien,
+            },
+          ];
+        } else {
+          const gewinnrundenCount = Math.max(1, parseInt(this.newRunde.gewinnrunden) || 1);
+          rundenDefinitionen = Array.from({ length: gewinnrundenCount }).map(() => ({
+            titel: null,
+            kategorien: this.newRunde.kategorien.map((kat) => ({
+              kategorieId: parseInt(kat.kategorieId),
+              anzahlMin: Math.max(0, parseInt(kat.anzahlMin) || 0),
+              anzahlMax: Math.max(
+                Math.max(0, parseInt(kat.anzahlMin) || 0),
+                parseInt(kat.anzahlMax) || 0
+              ),
+              anzahl: Math.max(0, parseInt(kat.anzahlMin) || 0),
+            })),
+          }));
+        }
+
+        const priceAmountProRunde = basisPreisAmount / Math.max(1, rundenDefinitionen.length);
+
+        for (let i = 0; i < rundenDefinitionen.length; i++) {
           const rundennummer = startRundennummer + i;
           const datum = day.date;
+          const definition = rundenDefinitionen[i];
 
           const rundeId = await window.electronAPI.createRunde(
             day.id,
@@ -1348,22 +1681,13 @@ function preisRundenApp() {
             datum,
             einnahmen,
             ausgaben,
-            this.newRunde.kategorien.map(kat => ({
-              kategorieId: parseInt(kat.kategorieId),
-              anzahlMin: Math.max(0, parseInt(kat.anzahlMin) || 0),
-              anzahlMax: Math.max(
-                Math.max(0, parseInt(kat.anzahlMin) || 0),
-                parseInt(kat.anzahlMax) || 0
-              ),
-              // Fallback fuer bestehende Logik in DB/Exports
-              anzahl: Math.max(0, parseInt(kat.anzahlMin) || 0)
-            })),
-            priceAmountProRunde
+            definition.kategorien,
+            priceAmountProRunde,
+            definition.titel
           );
 
           erstellteRunden.push(rundeId);
 
-          // Generiere Preise automatisch (auch bei 0, damit Kategorien korrekt auf 0 gesetzt werden können)
           const result = await window.electronAPI.generateRundenPreise(
             rundeId,
             Math.max(0, priceAmountProRunde)
@@ -1416,6 +1740,8 @@ function preisRundenApp() {
         priceAmount: 0,
         kategorien: [],
       };
+      this.newRundePriceAmountManuallyEdited = false;
+      this.newRundeConfigRundenPreview = [];
       this.rundeKategorieRowSeq = 0;
       this.clearNeueRundeErrors();
     },
@@ -1452,11 +1778,12 @@ function preisRundenApp() {
       
       // Lade Kategorien der Runde (mit Anzahl)
       this.aktuelleRunde.kategorien = await window.electronAPI.getRundenKategorien(this.aktuelleRunde.id);
-      this.initRundeDetailsDraft();
+      if (!this.showRundeDetailsModal) {
+        this.initRundeDetailsDraft();
+      }
       
       // Lade gewählte Preise der Runde
       this.rundePreise = await window.electronAPI.getRundenPreise(this.aktuelleRunde.id);
-      await this.syncAusgabenFromRundePreise();
       
       // Lade alle verfügbaren Preise
       this.verfuegbarePreise = await window.electronAPI.getAllPreise();
@@ -1513,7 +1840,11 @@ function preisRundenApp() {
 
     // Gefilterte verfügbare Preise (computed-like)
     getFilteredVerfuegbarePreise() {
-      let filtered = this.verfuegbarePreise;
+      let filtered = this.verfuegbarePreise.filter((p) => {
+        const gesamt = parseInt(p.anzahl) || 0;
+        const verfuegbar = gesamt - this.getPreisVerbraucht(p.id);
+        return verfuegbar > 0;
+      });
       
       // Text-Filter
       if (this.preisFilter) {
@@ -1564,36 +1895,85 @@ function preisRundenApp() {
     },
 
     // Preis zur Runde hinzufügen
-    async addPreisToRundeEditor(preis) {
-      if (!this.aktuelleRunde) return;
-      
-      // Finde passende Kategorie
+    resolveRundenKontextForPreis(preis, preferredRundenTitel = null) {
       let kategorieId = null;
-      if (this.aktuelleRunde.kategorien) {
-        for (const kat of this.aktuelleRunde.kategorien) {
+      let rundenTitel = null;
+      let rundenSortOrder = 0;
+
+      const kategorien = this.aktuelleRunde?.kategorien || [];
+      const hatPreferredTitel =
+        preferredRundenTitel &&
+        preferredRundenTitel !== "__AUTO__" &&
+        preferredRundenTitel !== "__DEFAULT__";
+
+      if (hatPreferredTitel) {
+        const kategorienInTitel = kategorien.filter(
+          (kat) => (kat.runden_titel || "Ohne Rundentitel") === preferredRundenTitel
+        );
+        for (const kat of kategorienInTitel) {
           if (preis.preis >= kat.wert1 && preis.preis <= kat.wert2) {
             kategorieId = kat.kategorie_id;
+            rundenTitel = kat.runden_titel || null;
+            rundenSortOrder = parseInt(kat.runden_sort_order) || 0;
+            break;
+          }
+        }
+        if (!kategorieId && kategorienInTitel.length > 0) {
+          const fallbackKat = kategorienInTitel[0];
+          kategorieId = fallbackKat.kategorie_id;
+          rundenTitel = fallbackKat.runden_titel || null;
+          rundenSortOrder = parseInt(fallbackKat.runden_sort_order) || 0;
+        }
+      }
+
+      if (!kategorieId) {
+        for (const kat of kategorien) {
+          if (preis.preis >= kat.wert1 && preis.preis <= kat.wert2) {
+            kategorieId = kat.kategorie_id;
+            rundenTitel = kat.runden_titel || null;
+            rundenSortOrder = parseInt(kat.runden_sort_order) || 0;
             break;
           }
         }
       }
-      
-      // Wenn keine passende Kategorie, nimm die erste
-      if (!kategorieId && this.aktuelleRunde.kategorien?.length > 0) {
-        kategorieId = this.aktuelleRunde.kategorien[0].kategorie_id;
+
+      if (!kategorieId && kategorien.length > 0) {
+        kategorieId = kategorien[0].kategorie_id;
+        rundenTitel = kategorien[0].runden_titel || null;
+        rundenSortOrder = parseInt(kategorien[0].runden_sort_order) || 0;
       }
-      
+
       if (!kategorieId && this.kategorien.length > 0) {
         kategorieId = this.kategorien[0].id;
       }
-      
+
+      return { kategorieId, rundenTitel, rundenSortOrder };
+    },
+
+    // Preis zur Runde hinzufügen
+    async addPreisToRundeEditor(preis, options = {}) {
+      if (!this.aktuelleRunde) return;
+
+      const preferredRundenTitel =
+        options.preferredRundenTitel ?? this.selectedRundenTitelForManualAdd;
+      const { kategorieId, rundenTitel, rundenSortOrder } = this.resolveRundenKontextForPreis(
+        preis,
+        preferredRundenTitel
+      );
+
       if (!kategorieId) {
         alert("Keine Kategorie vorhanden!");
         return;
       }
       
       try {
-        await window.electronAPI.addPreisZuRunde(this.aktuelleRunde.id, preis.id, kategorieId);
+        await window.electronAPI.addPreisZuRunde(
+          this.aktuelleRunde.id,
+          preis.id,
+          kategorieId,
+          rundenTitel,
+          rundenSortOrder
+        );
         await this.loadRundeEditorData();
       } catch (error) {
         console.error("Fehler beim Hinzufügen:", error);
@@ -1613,7 +1993,10 @@ function preisRundenApp() {
           await this.removePreisFromRundeEditor(rp.id);
           return;
         }
-        await window.electronAPI.updateRundenPreisAnzahl(rp.id, anzahl);
+        const gespeicherteAnzahl = await window.electronAPI.updateRundenPreisAnzahl(rp.id, anzahl);
+        if (Number.isFinite(gespeicherteAnzahl) && gespeicherteAnzahl < anzahl) {
+          alert(`Maximale Verfügbarkeit erreicht. Es wurden ${gespeicherteAnzahl} gespeichert.`);
+        }
         await this.loadRundeEditorData();
       } catch (error) {
         console.error("Fehler beim Aktualisieren der Anzahl:", error);
@@ -1634,7 +2017,8 @@ function preisRundenApp() {
           this.aktuelleRunde.id,
           einnahmen,
           neueAusgaben,
-          priceAmount
+          priceAmount,
+          this.aktuelleRunde.additional_title_text ?? ""
         );
 
         if (this.aktuellerLottoTag && this.rundenProTag[this.aktuellerLottoTag]) {
@@ -1727,15 +2111,18 @@ function preisRundenApp() {
       }
     },
 
-    async handleDropToRunde(event) {
+    async handleDropToRunde(event, preferredRundenTitel = null) {
       event.preventDefault();
       this.dragOverLeft = false;
+      this.dragOverRundenTitel = null;
       
       if (!this.draggedPreis) return;
       
       if (this.draggedPreis.source === 'available') {
         // Von verfügbar → Runde hinzufügen
-        await this.addPreisToRundeEditor(this.draggedPreis.preis);
+        await this.addPreisToRundeEditor(this.draggedPreis.preis, {
+          preferredRundenTitel,
+        });
       }
       
       this.draggedPreis = null;
@@ -1757,6 +2144,7 @@ function preisRundenApp() {
     handleDragEnd() {
       this.draggedPreis = null;
       this.dragOverLeft = false;
+      this.dragOverRundenTitel = null;
     },
 
     // Runde Einnahmen/Ausgaben/PriceAmount aktualisieren
@@ -1767,17 +2155,20 @@ function preisRundenApp() {
         const einnahmen = Math.max(0, this.parseOptionalNumber(this.aktuelleRunde.einnahmen));
         const ausgaben = Math.max(0, this.parseOptionalNumber(this.aktuelleRunde.ausgaben));
         const priceAmount = Math.max(0, this.parseOptionalNumber(this.aktuelleRunde.price_amount));
+        const additionalTitleText = String(this.aktuelleRunde.additional_title_text || "").trim();
 
         // UI auf normalisierte Werte zurücksetzen, damit die Eingabe stabil bleibt.
         this.aktuelleRunde.einnahmen = einnahmen;
         this.aktuelleRunde.ausgaben = ausgaben;
         this.aktuelleRunde.price_amount = priceAmount;
+        this.aktuelleRunde.additional_title_text = additionalTitleText;
 
         await window.electronAPI.updateRunde(
           this.aktuelleRunde.id,
           einnahmen,
           ausgaben,
-          priceAmount
+          priceAmount,
+          additionalTitleText
         );
 
         // Synchronisiere dieselbe Runde in der Tagesübersicht sofort.
@@ -1789,6 +2180,7 @@ function preisRundenApp() {
             this.rundenProTag[this.aktuellerLottoTag][idx].einnahmen = einnahmen;
             this.rundenProTag[this.aktuellerLottoTag][idx].ausgaben = ausgaben;
             this.rundenProTag[this.aktuellerLottoTag][idx].price_amount = priceAmount;
+            this.rundenProTag[this.aktuellerLottoTag][idx].additional_title_text = additionalTitleText;
           }
         }
         this.initRundeDetailsDraft();

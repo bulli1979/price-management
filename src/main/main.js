@@ -32,10 +32,23 @@ import {
   updateKonfiguration,
   removeKategorieVonKonfiguration,
   updateKonfigurationKategorie,
+  getKonfigurationRunden,
+  addKonfigurationRunde,
+  updateKonfigurationRunde,
+  deleteKonfigurationRunde,
+  getKonfigurationRundenPreise,
+  getKonfigurationRundenKategorien,
+  addKategorieZuKonfigurationRunde,
+  updateKonfigurationRundeKategorie,
+  removeKategorieVonKonfigurationRunde,
+  addPreisZuKonfigurationRunde,
+  updateKonfigurationRundePreis,
+  removePreisVonKonfigurationRunde,
   deleteKonfiguration,
   createRunde,
   getAllRunden,
   getRundeById,
+  deleteRunde,
   getRundenKategorien,
   addPreisZuRunde,
   removePreisVonRunde,
@@ -84,6 +97,7 @@ function createWindow() {
   });
 
   mainWindow.loadFile("src/renderer/index.html");
+  mainWindow.maximize();
 
   // Entwicklertools nur im Dev-Modus öffnen
   if (!app.isPackaged) {
@@ -93,6 +107,9 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   try {
+    if (process.platform === "win32") {
+      app.setAppUserModelId("com.preis-runden.app");
+    }
     console.log("App wird gestartet...");
     
     // Datenbank initialisieren
@@ -259,11 +276,59 @@ ipcMain.handle("delete-konfiguration", async (event, id) => {
   return await deleteKonfiguration(id);
 });
 
+ipcMain.handle("get-konfiguration-runden", async (event, konfigurationId) => {
+  return await getKonfigurationRunden(konfigurationId);
+});
+
+ipcMain.handle("add-konfiguration-runde", async (event, konfigurationId, titel, sortOrder) => {
+  return await addKonfigurationRunde(konfigurationId, titel, sortOrder);
+});
+
+ipcMain.handle("update-konfiguration-runde", async (event, rundeId, titel, sortOrder) => {
+  return await updateKonfigurationRunde(rundeId, titel, sortOrder);
+});
+
+ipcMain.handle("delete-konfiguration-runde", async (event, rundeId) => {
+  return await deleteKonfigurationRunde(rundeId);
+});
+
+ipcMain.handle("get-konfiguration-runden-preise", async (event, konfigurationRundeId) => {
+  return await getKonfigurationRundenPreise(konfigurationRundeId);
+});
+
+ipcMain.handle("get-konfiguration-runden-kategorien", async (event, konfigurationRundeId) => {
+  return await getKonfigurationRundenKategorien(konfigurationRundeId);
+});
+
+ipcMain.handle("add-kategorie-zu-konfiguration-runde", async (event, konfigurationRundeId, kategorieId, anzahlMin, anzahlMax) => {
+  return await addKategorieZuKonfigurationRunde(konfigurationRundeId, kategorieId, anzahlMin, anzahlMax);
+});
+
+ipcMain.handle("update-konfiguration-runde-kategorie", async (event, konfigurationRundeKategorieId, anzahlMin, anzahlMax) => {
+  return await updateKonfigurationRundeKategorie(konfigurationRundeKategorieId, anzahlMin, anzahlMax);
+});
+
+ipcMain.handle("remove-kategorie-von-konfiguration-runde", async (event, konfigurationRundeKategorieId) => {
+  return await removeKategorieVonKonfigurationRunde(konfigurationRundeKategorieId);
+});
+
+ipcMain.handle("add-preis-zu-konfiguration-runde", async (event, konfigurationRundeId, preisId, anzahl) => {
+  return await addPreisZuKonfigurationRunde(konfigurationRundeId, preisId, anzahl);
+});
+
+ipcMain.handle("update-konfiguration-runde-preis", async (event, rundenPreisId, anzahl) => {
+  return await updateKonfigurationRundePreis(rundenPreisId, anzahl);
+});
+
+ipcMain.handle("remove-preis-von-konfiguration-runde", async (event, rundenPreisId) => {
+  return await removePreisVonKonfigurationRunde(rundenPreisId);
+});
+
 // Runden-Handler
 ipcMain.handle(
   "create-runde",
-  async (event, lottoDayId, rundennummer, datum, einnahmen, ausgaben, kategorien, priceAmount) => {
-    return await createRunde(lottoDayId, rundennummer, datum, einnahmen, ausgaben, kategorien, priceAmount);
+  async (event, lottoDayId, rundennummer, datum, einnahmen, ausgaben, kategorien, priceAmount, titel = null) => {
+    return await createRunde(lottoDayId, rundennummer, datum, einnahmen, ausgaben, kategorien, priceAmount, titel);
   }
 );
 
@@ -275,14 +340,18 @@ ipcMain.handle("get-runde-by-id", async (event, id) => {
   return await getRundeById(id);
 });
 
+ipcMain.handle("delete-runde", async (event, rundeId) => {
+  return await deleteRunde(rundeId);
+});
+
 ipcMain.handle("get-runden-kategorien", async (event, rundeId) => {
   return await getRundenKategorien(rundeId);
 });
 
 ipcMain.handle(
   "add-preis-zu-runde",
-  async (event, rundeId, preisId, kategorieId) => {
-    return await addPreisZuRunde(rundeId, preisId, kategorieId);
+  async (event, rundeId, preisId, kategorieId, rundenTitel = null, rundenSortOrder = 0) => {
+    return await addPreisZuRunde(rundeId, preisId, kategorieId, rundenTitel, rundenSortOrder);
   }
 );
 
@@ -298,8 +367,8 @@ ipcMain.handle("update-runden-preis-anzahl", async (event, rundenPreisId, anzahl
   return await updateRundenPreisAnzahl(rundenPreisId, anzahl);
 });
 
-ipcMain.handle("update-runde", async (event, id, einnahmen, ausgaben, priceAmount) => {
-  return await updateRunde(id, einnahmen, ausgaben, priceAmount);
+ipcMain.handle("update-runde", async (event, id, einnahmen, ausgaben, priceAmount, additionalTitleText = undefined) => {
+  return await updateRunde(id, einnahmen, ausgaben, priceAmount, additionalTitleText);
 });
 
 ipcMain.handle("update-runden-kategorie", async (event, rundeId, kategorieId, anzahl) => {

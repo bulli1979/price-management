@@ -194,6 +194,8 @@ export async function initDatabase() {
       const columns = await db.all("PRAGMA table_info(runden)");
       const hasLottoDayId = columns.some(col => col.name === 'lotto_day_id');
       const hasPriceAmount = columns.some(col => col.name === 'price_amount');
+      const hasTitel = columns.some(col => col.name === 'titel');
+      const hasAdditionalTitleText = columns.some(col => col.name === 'additional_title_text');
       const idColumn = columns.find(col => col.name === 'id');
       const idIsPrimaryKey = idColumn && idColumn.pk > 0;
       
@@ -214,6 +216,8 @@ export async function initDatabase() {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             lotto_day_id INTEGER NOT NULL,
             rundennummer INTEGER NOT NULL,
+            titel TEXT,
+            additional_title_text TEXT,
             datum TEXT NOT NULL,
             einnahmen REAL NOT NULL DEFAULT 0,
             ausgaben REAL NOT NULL DEFAULT 0,
@@ -234,9 +238,9 @@ export async function initDatabase() {
           }
           if (lottoDayId) {
             await db.run(
-              `INSERT INTO runden (lotto_day_id, rundennummer, datum, einnahmen, ausgaben, price_amount, status, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-              [lottoDayId, row.rundennummer, row.datum,
+              `INSERT INTO runden (lotto_day_id, rundennummer, titel, additional_title_text, datum, einnahmen, ausgaben, price_amount, status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [lottoDayId, row.rundennummer, row.titel || null, row.additional_title_text || null, row.datum,
                row.einnahmen || 0,
                row.ausgaben || 0,
                row.price_amount || row.ausgaben || 0,
@@ -258,6 +262,22 @@ export async function initDatabase() {
             console.log("Migration price_amount übersprungen:", error.message);
           }
         }
+        if (!hasTitel) {
+          try {
+            await db.exec("ALTER TABLE runden ADD COLUMN titel TEXT");
+            console.log("Migration: titel Spalte hinzugefügt");
+          } catch (error) {
+            console.log("Migration titel übersprungen:", error.message);
+          }
+        }
+        if (!hasAdditionalTitleText) {
+          try {
+            await db.exec("ALTER TABLE runden ADD COLUMN additional_title_text TEXT");
+            console.log("Migration: additional_title_text Spalte hinzugefügt");
+          } catch (error) {
+            console.log("Migration additional_title_text übersprungen:", error.message);
+          }
+        }
         console.log("Runden-Tabelle hat korrekte Struktur");
       }
     } else {
@@ -266,6 +286,8 @@ export async function initDatabase() {
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           lotto_day_id INTEGER NOT NULL,
           rundennummer INTEGER NOT NULL,
+          titel TEXT,
+          additional_title_text TEXT,
           datum TEXT NOT NULL,
           einnahmen REAL NOT NULL DEFAULT 0,
           ausgaben REAL NOT NULL DEFAULT 0,
@@ -299,6 +321,40 @@ export async function initDatabase() {
       )
     `);
 
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS konfigurationen_runden (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        konfiguration_id INTEGER NOT NULL,
+        titel TEXT NOT NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (konfiguration_id) REFERENCES konfigurationen (id) ON DELETE CASCADE
+      )
+    `);
+
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS konfigurationen_runden_preise (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        konfiguration_runde_id INTEGER NOT NULL,
+        preis_id INTEGER NOT NULL,
+        anzahl INTEGER NOT NULL DEFAULT 1,
+        FOREIGN KEY (konfiguration_runde_id) REFERENCES konfigurationen_runden (id) ON DELETE CASCADE,
+        FOREIGN KEY (preis_id) REFERENCES preise (id)
+      )
+    `);
+
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS konfigurationen_runden_kategorien (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        konfiguration_runde_id INTEGER NOT NULL,
+        kategorie_id INTEGER NOT NULL,
+        anzahl_min INTEGER NOT NULL DEFAULT 0,
+        anzahl_max INTEGER NOT NULL DEFAULT 999,
+        FOREIGN KEY (konfiguration_runde_id) REFERENCES konfigurationen_runden (id) ON DELETE CASCADE,
+        FOREIGN KEY (kategorie_id) REFERENCES kategorien (id)
+      )
+    `);
+
     // Runden-Kategorien und Runden-Preise:
     // FKs sind bereits OFF (seit Beginn der initDatabase), daher können wir sicher reparieren
 
@@ -319,6 +375,8 @@ export async function initDatabase() {
             anzahl INTEGER NOT NULL DEFAULT 1,
             anzahl_min INTEGER NOT NULL DEFAULT 0,
             anzahl_max INTEGER NOT NULL DEFAULT 999,
+            runden_titel TEXT,
+            runden_sort_order INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY (runde_id) REFERENCES runden (id) ON DELETE CASCADE,
             FOREIGN KEY (kategorie_id) REFERENCES kategorien (id)
           )
@@ -330,8 +388,8 @@ export async function initDatabase() {
             const anzahlMin = Math.max(0, parseInt(row.anzahl_min) || anzahl);
             const anzahlMax = Math.max(anzahlMin, parseInt(row.anzahl_max) || anzahlMin);
             await db.run(
-              "INSERT INTO runden_kategorien (runde_id, kategorie_id, anzahl, anzahl_min, anzahl_max) VALUES (?, ?, ?, ?, ?)",
-              [row.runde_id, row.kategorie_id, anzahl, anzahlMin, anzahlMax]
+              "INSERT INTO runden_kategorien (runde_id, kategorie_id, anzahl, anzahl_min, anzahl_max, runden_titel, runden_sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)",
+              [row.runde_id, row.kategorie_id, anzahl, anzahlMin, anzahlMax, row.runden_titel || null, row.runden_sort_order || 0]
             );
           }
         }
@@ -346,6 +404,8 @@ export async function initDatabase() {
           anzahl INTEGER NOT NULL DEFAULT 1,
           anzahl_min INTEGER NOT NULL DEFAULT 0,
           anzahl_max INTEGER NOT NULL DEFAULT 999,
+          runden_titel TEXT,
+          runden_sort_order INTEGER NOT NULL DEFAULT 0,
           FOREIGN KEY (runde_id) REFERENCES runden (id) ON DELETE CASCADE,
           FOREIGN KEY (kategorie_id) REFERENCES kategorien (id)
         )
@@ -356,6 +416,8 @@ export async function initDatabase() {
     const rkColumns = await db.all("PRAGMA table_info(runden_kategorien)");
     const hasAnzahlMin = rkColumns.some((c) => c.name === "anzahl_min");
     const hasAnzahlMax = rkColumns.some((c) => c.name === "anzahl_max");
+    const hasRundenTitel = rkColumns.some((c) => c.name === "runden_titel");
+    const hasRundenSortOrder = rkColumns.some((c) => c.name === "runden_sort_order");
     if (!hasAnzahlMin) {
       await db.exec("ALTER TABLE runden_kategorien ADD COLUMN anzahl_min INTEGER NOT NULL DEFAULT 0");
       await db.exec("UPDATE runden_kategorien SET anzahl_min = CASE WHEN anzahl < 0 THEN 0 ELSE anzahl END");
@@ -365,6 +427,12 @@ export async function initDatabase() {
       await db.exec(
         "UPDATE runden_kategorien SET anzahl_max = CASE WHEN anzahl_min > anzahl THEN anzahl_min ELSE anzahl END"
       );
+    }
+    if (!hasRundenTitel) {
+      await db.exec("ALTER TABLE runden_kategorien ADD COLUMN runden_titel TEXT");
+    }
+    if (!hasRundenSortOrder) {
+      await db.exec("ALTER TABLE runden_kategorien ADD COLUMN runden_sort_order INTEGER NOT NULL DEFAULT 0");
     }
 
     // Runden-Preise: Drop und Neuerstellen falls Struktur veraltet
@@ -384,6 +452,8 @@ export async function initDatabase() {
             preis_id INTEGER NOT NULL,
             kategorie_id INTEGER NOT NULL,
             anzahl INTEGER NOT NULL DEFAULT 1,
+            runden_titel TEXT,
+            runden_sort_order INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY (runde_id) REFERENCES runden (id) ON DELETE CASCADE,
             FOREIGN KEY (preis_id) REFERENCES preise (id),
             FOREIGN KEY (kategorie_id) REFERENCES kategorien (id)
@@ -392,8 +462,10 @@ export async function initDatabase() {
         for (const row of oldPreiseData) {
           const valid = await db.get("SELECT id FROM runden WHERE id = ?", [row.runde_id]);
           if (valid) {
-            await db.run("INSERT INTO runden_preise (runde_id, preis_id, kategorie_id, anzahl) VALUES (?, ?, ?, ?)",
-              [row.runde_id, row.preis_id, row.kategorie_id, row.anzahl || 1]);
+            await db.run(
+              "INSERT INTO runden_preise (runde_id, preis_id, kategorie_id, anzahl, runden_titel, runden_sort_order) VALUES (?, ?, ?, ?, ?, ?)",
+              [row.runde_id, row.preis_id, row.kategorie_id, row.anzahl || 1, row.runden_titel || null, row.runden_sort_order || 0]
+            );
           }
         }
         console.log("runden_preise neu erstellt mit anzahl-Spalte");
@@ -406,11 +478,23 @@ export async function initDatabase() {
           preis_id INTEGER NOT NULL,
           kategorie_id INTEGER NOT NULL,
           anzahl INTEGER NOT NULL DEFAULT 1,
+          runden_titel TEXT,
+          runden_sort_order INTEGER NOT NULL DEFAULT 0,
           FOREIGN KEY (runde_id) REFERENCES runden (id) ON DELETE CASCADE,
           FOREIGN KEY (preis_id) REFERENCES preise (id),
           FOREIGN KEY (kategorie_id) REFERENCES kategorien (id)
         )
       `);
+    }
+
+    const rpColumns = await db.all("PRAGMA table_info(runden_preise)");
+    const hasRundenTitelRP = rpColumns.some((c) => c.name === "runden_titel");
+    const hasRundenSortOrderRP = rpColumns.some((c) => c.name === "runden_sort_order");
+    if (!hasRundenTitelRP) {
+      await db.exec("ALTER TABLE runden_preise ADD COLUMN runden_titel TEXT");
+    }
+    if (!hasRundenSortOrderRP) {
+      await db.exec("ALTER TABLE runden_preise ADD COLUMN runden_sort_order INTEGER NOT NULL DEFAULT 0");
     }
 
     // FK wieder aktivieren
@@ -700,25 +784,164 @@ export async function removeKategorieVonKonfiguration(konfigurationId, kategorie
 
 export async function updateKonfigurationKategorie(konfigurationId, kategorieId, anzahlMin, anzahlMax) {
   const database = await getDatabase();
+  const min = Math.max(0, parseInt(anzahlMin) || 0);
+  const max = Math.max(min, parseInt(anzahlMax) || min);
   await database.run(
     "UPDATE konfigurationen_kategorien SET anzahl_min = ?, anzahl_max = ? WHERE konfiguration_id = ? AND kategorie_id = ?",
-    [anzahlMin, anzahlMax, konfigurationId, kategorieId]
+    [min, max, konfigurationId, kategorieId]
+  );
+}
+
+export async function getKonfigurationRunden(konfigurationId) {
+  const database = await getDatabase();
+  return await database.all(
+    `SELECT *
+     FROM konfigurationen_runden
+     WHERE konfiguration_id = ?
+     ORDER BY sort_order ASC, id ASC`,
+    [konfigurationId]
+  );
+}
+
+export async function addKonfigurationRunde(konfigurationId, titel, sortOrder = 0) {
+  const database = await getDatabase();
+  const result = await database.run(
+    "INSERT INTO konfigurationen_runden (konfiguration_id, titel, sort_order) VALUES (?, ?, ?)",
+    [konfigurationId, titel, sortOrder]
+  );
+  return result.lastID;
+}
+
+export async function updateKonfigurationRunde(rundeId, titel, sortOrder = 0) {
+  const database = await getDatabase();
+  await database.run(
+    "UPDATE konfigurationen_runden SET titel = ?, sort_order = ? WHERE id = ?",
+    [titel, sortOrder, rundeId]
+  );
+}
+
+export async function deleteKonfigurationRunde(rundeId) {
+  const database = await getDatabase();
+  await database.run(
+    "DELETE FROM konfigurationen_runden_kategorien WHERE konfiguration_runde_id = ?",
+    [rundeId]
+  );
+  await database.run("DELETE FROM konfigurationen_runden WHERE id = ?", [rundeId]);
+}
+
+export async function getKonfigurationRundenPreise(konfigurationRundeId) {
+  const database = await getDatabase();
+  return await database.all(
+    `SELECT krp.*, p.name as preis_name, p.herkunft, p.preis
+     FROM konfigurationen_runden_preise krp
+     JOIN preise p ON krp.preis_id = p.id
+     WHERE krp.konfiguration_runde_id = ?
+     ORDER BY p.name ASC`,
+    [konfigurationRundeId]
+  );
+}
+
+export async function addPreisZuKonfigurationRunde(konfigurationRundeId, preisId, anzahl = 1) {
+  const database = await getDatabase();
+  const normalizedAnzahl = Math.max(1, parseInt(anzahl) || 1);
+  const result = await database.run(
+    "INSERT INTO konfigurationen_runden_preise (konfiguration_runde_id, preis_id, anzahl) VALUES (?, ?, ?)",
+    [konfigurationRundeId, preisId, normalizedAnzahl]
+  );
+  return result.lastID;
+}
+
+export async function updateKonfigurationRundePreis(rundenPreisId, anzahl = 1) {
+  const database = await getDatabase();
+  const normalizedAnzahl = Math.max(1, parseInt(anzahl) || 1);
+  await database.run(
+    "UPDATE konfigurationen_runden_preise SET anzahl = ? WHERE id = ?",
+    [normalizedAnzahl, rundenPreisId]
+  );
+}
+
+export async function removePreisVonKonfigurationRunde(rundenPreisId) {
+  const database = await getDatabase();
+  await database.run(
+    "DELETE FROM konfigurationen_runden_preise WHERE id = ?",
+    [rundenPreisId]
+  );
+}
+
+export async function getKonfigurationRundenKategorien(konfigurationRundeId) {
+  const database = await getDatabase();
+  return await database.all(
+    `SELECT krk.*, k.name as kategorie_name, k.wert1, k.wert2
+     FROM konfigurationen_runden_kategorien krk
+     JOIN kategorien k ON krk.kategorie_id = k.id
+     WHERE krk.konfiguration_runde_id = ?
+     ORDER BY k.name ASC`,
+    [konfigurationRundeId]
+  );
+}
+
+export async function addKategorieZuKonfigurationRunde(
+  konfigurationRundeId,
+  kategorieId,
+  anzahlMin,
+  anzahlMax
+) {
+  const database = await getDatabase();
+  const min = Math.max(0, parseInt(anzahlMin) || 0);
+  const max = Math.max(min, parseInt(anzahlMax) || min);
+  const result = await database.run(
+    "INSERT INTO konfigurationen_runden_kategorien (konfiguration_runde_id, kategorie_id, anzahl_min, anzahl_max) VALUES (?, ?, ?, ?)",
+    [konfigurationRundeId, kategorieId, min, max]
+  );
+  return result.lastID;
+}
+
+export async function updateKonfigurationRundeKategorie(
+  konfigurationRundeKategorieId,
+  anzahlMin,
+  anzahlMax
+) {
+  const database = await getDatabase();
+  const min = Math.max(0, parseInt(anzahlMin) || 0);
+  const max = Math.max(min, parseInt(anzahlMax) || min);
+  await database.run(
+    "UPDATE konfigurationen_runden_kategorien SET anzahl_min = ?, anzahl_max = ? WHERE id = ?",
+    [min, max, konfigurationRundeKategorieId]
+  );
+}
+
+export async function removeKategorieVonKonfigurationRunde(
+  konfigurationRundeKategorieId
+) {
+  const database = await getDatabase();
+  await database.run(
+    "DELETE FROM konfigurationen_runden_kategorien WHERE id = ?",
+    [konfigurationRundeKategorieId]
   );
 }
 
 export async function deleteKonfiguration(id) {
   const database = await getDatabase();
+  await database.run(
+    "DELETE FROM konfigurationen_runden_kategorien WHERE konfiguration_runde_id IN (SELECT id FROM konfigurationen_runden WHERE konfiguration_id = ?)",
+    [id]
+  );
+  await database.run(
+    "DELETE FROM konfigurationen_runden_preise WHERE konfiguration_runde_id IN (SELECT id FROM konfigurationen_runden WHERE konfiguration_id = ?)",
+    [id]
+  );
+  await database.run("DELETE FROM konfigurationen_runden WHERE konfiguration_id = ?", [id]);
   await database.run("DELETE FROM konfigurationen_kategorien WHERE konfiguration_id = ?", [id]);
   await database.run("DELETE FROM konfigurationen WHERE id = ?", [id]);
 }
 
 // Runden-Funktionen
-export async function createRunde(lottoDayId, rundennummer, datum, einnahmen, ausgaben, kategorien, priceAmount = 0) {
+export async function createRunde(lottoDayId, rundennummer, datum, einnahmen, ausgaben, kategorien, priceAmount = 0, titel = null) {
   const database = await getDatabase();
 
   const result = await database.run(
-    "INSERT INTO runden (lotto_day_id, rundennummer, datum, einnahmen, ausgaben, price_amount) VALUES (?, ?, ?, ?, ?, ?)",
-    [lottoDayId, rundennummer, datum, einnahmen, ausgaben, priceAmount ?? ausgaben]
+    "INSERT INTO runden (lotto_day_id, rundennummer, titel, additional_title_text, datum, einnahmen, ausgaben, price_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    [lottoDayId, rundennummer, titel, null, datum, einnahmen, ausgaben, priceAmount ?? ausgaben]
   );
 
   const rundeId = result.lastID;
@@ -729,9 +952,11 @@ export async function createRunde(lottoDayId, rundennummer, datum, einnahmen, au
     const anzahlMin = Math.max(0, parseInt(kat.anzahlMin) || 0);
     const anzahlMax = Math.max(anzahlMin, parseInt(kat.anzahlMax) || anzahlMin);
     const anzahl = Math.max(anzahlMin, Math.min(anzahlMax, parseInt(kat.anzahl) || anzahlMin));
+    const rundenTitel = kat.rundenTitel || null;
+    const rundenSortOrder = parseInt(kat.rundenSortOrder) || 0;
     await database.run(
-      "INSERT INTO runden_kategorien (runde_id, kategorie_id, anzahl, anzahl_min, anzahl_max) VALUES (?, ?, ?, ?, ?)",
-      [rundeId, kat.kategorieId, anzahl, anzahlMin, anzahlMax]
+      "INSERT INTO runden_kategorien (runde_id, kategorie_id, anzahl, anzahl_min, anzahl_max, runden_titel, runden_sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [rundeId, kat.kategorieId, anzahl, anzahlMin, anzahlMax, rundenTitel, rundenSortOrder]
     );
   }
 
@@ -762,13 +987,19 @@ export async function getRundeById(id) {
   return runde;
 }
 
+export async function deleteRunde(rundeId) {
+  const database = await getDatabase();
+  await database.run("DELETE FROM runden WHERE id = ?", [rundeId]);
+}
+
 export async function getRundenKategorien(rundeId) {
   const database = await getDatabase();
   return await database.all(
     `SELECT rk.*, k.name as kategorie_name, k.wert1, k.wert2
      FROM runden_kategorien rk
      JOIN kategorien k ON rk.kategorie_id = k.id
-     WHERE rk.runde_id = ?`,
+     WHERE rk.runde_id = ?
+     ORDER BY rk.runden_sort_order ASC, rk.id ASC`,
     [rundeId]
   );
 }
@@ -804,11 +1035,90 @@ export async function updateRundenKategorieRange(
   );
 }
 
-export async function addPreisZuRunde(rundeId, preisId, kategorieId) {
+async function getMaxVerfuegbareAnzahlFuerPreisInRunde(
+  rundeId,
+  preisId,
+  excludeRundenPreisId = null
+) {
   const database = await getDatabase();
+  const basis = await database.get(
+    `
+      SELECT p.anzahl AS gesamt_verfuegbar, ld.lotto_id
+      FROM runden r
+      JOIN lotto_days ld ON r.lotto_day_id = ld.id
+      JOIN preise p ON p.id = ?
+      WHERE r.id = ?
+    `,
+    [preisId, rundeId]
+  );
+
+  if (!basis) return 0;
+
+  const params = [basis.lotto_id, preisId];
+  let excludeSql = "";
+  if (excludeRundenPreisId !== null && excludeRundenPreisId !== undefined) {
+    excludeSql = "AND rp.id <> ?";
+    params.push(excludeRundenPreisId);
+  }
+
+  const usage = await database.get(
+    `
+      SELECT COALESCE(SUM(rp.anzahl), 0) AS verbraucht
+      FROM runden_preise rp
+      JOIN runden r ON rp.runde_id = r.id
+      JOIN lotto_days ld ON r.lotto_day_id = ld.id
+      WHERE ld.lotto_id = ?
+        AND rp.preis_id = ?
+        ${excludeSql}
+    `,
+    params
+  );
+
+  const gesamt = Math.max(0, parseInt(basis.gesamt_verfuegbar) || 0);
+  const verbraucht = Math.max(0, parseInt(usage?.verbraucht) || 0);
+  return Math.max(0, gesamt - verbraucht);
+}
+
+export async function addPreisZuRunde(rundeId, preisId, kategorieId, rundenTitel = null, rundenSortOrder = 0) {
+  const database = await getDatabase();
+  const normalizedTitel = rundenTitel || null;
+  const normalizedSortOrder = parseInt(rundenSortOrder) || 0;
+  const existing = await database.get(
+    `
+      SELECT id, anzahl
+      FROM runden_preise
+      WHERE runde_id = ?
+        AND preis_id = ?
+        AND COALESCE(runden_titel, '') = COALESCE(?, '')
+      ORDER BY id ASC
+      LIMIT 1
+    `,
+    [rundeId, preisId, normalizedTitel]
+  );
+
+  if (existing) {
+    const maxMoeglich = await getMaxVerfuegbareAnzahlFuerPreisInRunde(
+      rundeId,
+      preisId,
+      existing.id
+    );
+    const current = Math.max(0, parseInt(existing.anzahl) || 0);
+    const next = Math.min(maxMoeglich, current + 1);
+    if (next <= current) {
+      throw new Error("Maximale Verfügbarkeit erreicht.");
+    }
+    await database.run("UPDATE runden_preise SET anzahl = ? WHERE id = ?", [next, existing.id]);
+    return existing.id;
+  }
+
+  const maxMoeglich = await getMaxVerfuegbareAnzahlFuerPreisInRunde(rundeId, preisId, null);
+  if (maxMoeglich < 1) {
+    throw new Error("Maximale Verfügbarkeit erreicht.");
+  }
+
   const result = await database.run(
-    "INSERT INTO runden_preise (runde_id, preis_id, kategorie_id) VALUES (?, ?, ?)",
-    [rundeId, preisId, kategorieId]
+    "INSERT INTO runden_preise (runde_id, preis_id, kategorie_id, anzahl, runden_titel, runden_sort_order) VALUES (?, ?, ?, ?, ?, ?)",
+    [rundeId, preisId, kategorieId, 1, normalizedTitel, normalizedSortOrder]
   );
   return result.lastID;
 }
@@ -826,11 +1136,20 @@ export async function removePreisVonRundeById(rundenPreisId) {
   await database.run("DELETE FROM runden_preise WHERE id = ?", [rundenPreisId]);
 }
 
-export async function updateRunde(id, einnahmen, ausgaben, priceAmount) {
+export async function updateRunde(id, einnahmen, ausgaben, priceAmount, additionalTitleText = undefined) {
   const database = await getDatabase();
+  if (additionalTitleText === undefined) {
+    await database.run(
+      "UPDATE runden SET einnahmen = ?, ausgaben = ?, price_amount = ? WHERE id = ?",
+      [einnahmen, ausgaben, priceAmount, id]
+    );
+    return;
+  }
+
+  const normalizedAdditionalTitleText = String(additionalTitleText || "").trim();
   await database.run(
-    "UPDATE runden SET einnahmen = ?, ausgaben = ?, price_amount = ? WHERE id = ?",
-    [einnahmen, ausgaben, priceAmount, id]
+    "UPDATE runden SET einnahmen = ?, ausgaben = ?, price_amount = ?, additional_title_text = ? WHERE id = ?",
+    [einnahmen, ausgaben, priceAmount, normalizedAdditionalTitleText || null, id]
   );
 }
 
@@ -848,7 +1167,7 @@ export async function getRundenPreise(rundeId) {
     JOIN preise p ON rp.preis_id = p.id
     JOIN kategorien k ON rp.kategorie_id = k.id
     WHERE rp.runde_id = ?
-    ORDER BY k.name, p.preis
+    ORDER BY rp.runden_sort_order ASC, rp.runden_titel ASC, k.name ASC, p.preis ASC
   `,
     [rundeId]
   );
@@ -856,10 +1175,27 @@ export async function getRundenPreise(rundeId) {
 
 export async function updateRundenPreisAnzahl(rundenPreisId, anzahl) {
   const database = await getDatabase();
-  await database.run(
-    "UPDATE runden_preise SET anzahl = ? WHERE id = ?",
-    [anzahl, rundenPreisId]
+  const target = await database.get(
+    "SELECT id, runde_id, preis_id FROM runden_preise WHERE id = ?",
+    [rundenPreisId]
   );
+  if (!target) return 0;
+
+  const requested = Math.max(0, parseInt(anzahl) || 0);
+  const maxMoeglich = await getMaxVerfuegbareAnzahlFuerPreisInRunde(
+    target.runde_id,
+    target.preis_id,
+    target.id
+  );
+  const normalized = Math.min(requested, maxMoeglich);
+
+  if (normalized <= 0) {
+    await database.run("DELETE FROM runden_preise WHERE id = ?", [rundenPreisId]);
+    return 0;
+  }
+
+  await database.run("UPDATE runden_preise SET anzahl = ? WHERE id = ?", [normalized, rundenPreisId]);
+  return normalized;
 }
 
 // Preishistorie: Welcher Preis wurde wann verteilt
@@ -922,11 +1258,11 @@ export async function getPreiseByKategorie(kategorieId) {
   let params;
 
   if (kategorie.typ === "groesser") {
-    query = "SELECT * FROM preise WHERE preis > ? ORDER BY preis ASC";
+    query = "SELECT * FROM preise WHERE anzahl > 0 AND preis > ? ORDER BY preis ASC";
     params = [kategorie.wert1];
   } else if (kategorie.typ === "von_bis") {
     query =
-      "SELECT * FROM preise WHERE preis >= ? AND preis <= ? ORDER BY preis ASC";
+      "SELECT * FROM preise WHERE anzahl > 0 AND preis >= ? AND preis <= ? ORDER BY preis ASC";
     params = [kategorie.wert1, kategorie.wert2];
   }
 
@@ -1059,7 +1395,7 @@ export async function generateRundenPreise(rundeId, zielsumme) {
       continue;
     }
     
-    let selected = selectPreiseGleichverteilt(pool, effektiveAnzahl, zielSummeKat);
+    let selected = selectPreiseGleichverteilt(pool, effektiveAnzahl, zielSummeKat, true);
     selected = selected.slice(0, effektiveAnzahl);
 
     // Mindestmenge bevorzugen; danach strikt im Budget bleiben.
@@ -1102,16 +1438,18 @@ export async function generateRundenPreise(rundeId, zielsumme) {
     for (const preis of selected) {
       ausgewaehltePreise.push({
         preisId: preis.id,
-        kategorieId: rk.kategorie_id
+        kategorieId: rk.kategorie_id,
+        rundenTitel: rk.runden_titel || null,
+        rundenSortOrder: parseInt(rk.runden_sort_order) || 0,
       });
       bereitsGewaehlt.add(preis.id);
     }
   }
 
-  // Gleiche Preise je Kategorie zusammenfassen und als Anzahl speichern
+  // Gleiche Preise je Kategorie und internem Runden-Titel zusammenfassen.
   const groupedPreise = new Map();
   for (const p of ausgewaehltePreise) {
-    const key = `${p.preisId}:${p.kategorieId}`;
+    const key = `${p.preisId}:${p.kategorieId}:${p.rundenTitel || ""}:${p.rundenSortOrder || 0}`;
     groupedPreise.set(
       key,
       (groupedPreise.get(key) || 0) + 1
@@ -1120,10 +1458,16 @@ export async function generateRundenPreise(rundeId, zielsumme) {
 
   // Preise zur Runde hinzufügen (mit variierbarer Anzahl)
   for (const [key, count] of groupedPreise.entries()) {
-    const [preisIdRaw, kategorieIdRaw] = key.split(":");
+    const parts = key.split(":");
+    const preisIdRaw = parts.shift();
+    const kategorieIdRaw = parts.shift();
+    const sortOrderRaw = parts.pop();
+    const titelParts = parts;
     const preisId = parseInt(preisIdRaw);
     const kategorieId = parseInt(kategorieIdRaw);
-    const rundenPreisId = await addPreisZuRunde(rundeId, preisId, kategorieId);
+    const rundenTitel = (titelParts || []).join(":") || null;
+    const rundenSortOrder = parseInt(sortOrderRaw) || 0;
+    const rundenPreisId = await addPreisZuRunde(rundeId, preisId, kategorieId, rundenTitel, rundenSortOrder);
     if (count > 1) {
       await updateRundenPreisAnzahl(rundenPreisId, count);
     }
@@ -1197,11 +1541,15 @@ function chooseDynamicKategorieAnzahl({ min, max, maxBezahlbar, zielSummeKat, pr
 }
 
 // Hilfsfunktion: Preise gleichverteilt auswählen (basierend auf Einzelpreis)
-function selectPreiseGleichverteilt(preise, anzahl, zielsumme) {
+function selectPreiseGleichverteilt(preise, anzahl, zielsumme, preferUnique = true) {
   if (preise.length === 0 || anzahl === 0) return [];
+  const uniqueCount = new Set(preise.map((p) => p.id)).size;
   
   // 1) zuerst ohne Duplikate versuchen
   const withoutDuplicates = findBestCombination(preise, anzahl, zielsumme, false);
+  if (preferUnique && uniqueCount >= anzahl && withoutDuplicates.length >= anzahl) {
+    return withoutDuplicates;
+  }
   const withoutDupSum = withoutDuplicates.reduce((sum, p) => sum + p.preis, 0);
   const withoutDupDiff = getBudgetScore(withoutDupSum, zielsumme);
 
@@ -1229,6 +1577,9 @@ export async function exportAllData() {
   const rundenPreise = await database.all("SELECT * FROM runden_preise ORDER BY id");
   const konfigurationen = await database.all("SELECT * FROM konfigurationen ORDER BY id");
   const konfigurationenKategorien = await database.all("SELECT * FROM konfigurationen_kategorien ORDER BY id");
+  const konfigurationenRunden = await database.all("SELECT * FROM konfigurationen_runden ORDER BY id");
+  const konfigurationenRundenKategorien = await database.all("SELECT * FROM konfigurationen_runden_kategorien ORDER BY id");
+  const konfigurationenRundenPreise = await database.all("SELECT * FROM konfigurationen_runden_preise ORDER BY id");
 
   return {
     version: 1,
@@ -1243,6 +1594,9 @@ export async function exportAllData() {
       runden_preise: rundenPreise,
       konfigurationen,
       konfigurationen_kategorien: konfigurationenKategorien,
+      konfigurationen_runden: konfigurationenRunden,
+      konfigurationen_runden_kategorien: konfigurationenRundenKategorien,
+      konfigurationen_runden_preise: konfigurationenRundenPreise,
     }
   };
 }
@@ -1268,6 +1622,9 @@ export async function importAllData(jsonData) {
     await database.exec("DELETE FROM runden");
     await database.exec("DELETE FROM lotto_days");
     await database.exec("DELETE FROM lottos");
+    await database.exec("DELETE FROM konfigurationen_runden_preise");
+    await database.exec("DELETE FROM konfigurationen_runden_kategorien");
+    await database.exec("DELETE FROM konfigurationen_runden");
     await database.exec("DELETE FROM konfigurationen_kategorien");
     await database.exec("DELETE FROM konfigurationen");
     await database.exec("DELETE FROM kategorien");
@@ -1317,8 +1674,8 @@ export async function importAllData(jsonData) {
     if (d.runden) {
       for (const row of d.runden) {
         await database.run(
-          "INSERT INTO runden (id, lotto_day_id, rundennummer, datum, einnahmen, ausgaben, price_amount, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          [row.id, row.lotto_day_id, row.rundennummer, row.datum, row.einnahmen, row.ausgaben, row.price_amount, row.status, row.created_at]
+          "INSERT INTO runden (id, lotto_day_id, rundennummer, titel, additional_title_text, datum, einnahmen, ausgaben, price_amount, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          [row.id, row.lotto_day_id, row.rundennummer, row.titel || null, row.additional_title_text || null, row.datum, row.einnahmen, row.ausgaben, row.price_amount, row.status, row.created_at]
         );
       }
     }
@@ -1330,8 +1687,8 @@ export async function importAllData(jsonData) {
         const anzahlMin = Math.max(0, parseInt(row.anzahl_min) || anzahl);
         const anzahlMax = Math.max(anzahlMin, parseInt(row.anzahl_max) || anzahlMin);
         await database.run(
-          "INSERT INTO runden_kategorien (id, runde_id, kategorie_id, anzahl, anzahl_min, anzahl_max) VALUES (?, ?, ?, ?, ?, ?)",
-          [row.id, row.runde_id, row.kategorie_id, anzahl, anzahlMin, anzahlMax]
+          "INSERT INTO runden_kategorien (id, runde_id, kategorie_id, anzahl, anzahl_min, anzahl_max, runden_titel, runden_sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          [row.id, row.runde_id, row.kategorie_id, anzahl, anzahlMin, anzahlMax, row.runden_titel || null, row.runden_sort_order || 0]
         );
       }
     }
@@ -1340,8 +1697,8 @@ export async function importAllData(jsonData) {
     if (d.runden_preise) {
       for (const row of d.runden_preise) {
         await database.run(
-          "INSERT INTO runden_preise (id, runde_id, preis_id, kategorie_id, anzahl) VALUES (?, ?, ?, ?, ?)",
-          [row.id, row.runde_id, row.preis_id, row.kategorie_id, row.anzahl]
+          "INSERT INTO runden_preise (id, runde_id, preis_id, kategorie_id, anzahl, runden_titel, runden_sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          [row.id, row.runde_id, row.preis_id, row.kategorie_id, row.anzahl, row.runden_titel || null, row.runden_sort_order || 0]
         );
       }
     }
@@ -1366,6 +1723,33 @@ export async function importAllData(jsonData) {
       }
     }
 
+    if (d.konfigurationen_runden) {
+      for (const row of d.konfigurationen_runden) {
+        await database.run(
+          "INSERT INTO konfigurationen_runden (id, konfiguration_id, titel, sort_order, created_at) VALUES (?, ?, ?, ?, ?)",
+          [row.id, row.konfiguration_id, row.titel, row.sort_order || 0, row.created_at]
+        );
+      }
+    }
+
+    if (d.konfigurationen_runden_kategorien) {
+      for (const row of d.konfigurationen_runden_kategorien) {
+        await database.run(
+          "INSERT INTO konfigurationen_runden_kategorien (id, konfiguration_runde_id, kategorie_id, anzahl_min, anzahl_max) VALUES (?, ?, ?, ?, ?)",
+          [row.id, row.konfiguration_runde_id, row.kategorie_id, row.anzahl_min, row.anzahl_max]
+        );
+      }
+    }
+
+    if (d.konfigurationen_runden_preise) {
+      for (const row of d.konfigurationen_runden_preise) {
+        await database.run(
+          "INSERT INTO konfigurationen_runden_preise (id, konfiguration_runde_id, preis_id, anzahl) VALUES (?, ?, ?, ?)",
+          [row.id, row.konfiguration_runde_id, row.preis_id, row.anzahl || 1]
+        );
+      }
+    }
+
     await database.exec("COMMIT");
     
     const counts = {
@@ -1378,6 +1762,9 @@ export async function importAllData(jsonData) {
       runden_preise: d.runden_preise?.length || 0,
       konfigurationen: d.konfigurationen?.length || 0,
       konfigurationen_kategorien: d.konfigurationen_kategorien?.length || 0,
+      konfigurationen_runden: d.konfigurationen_runden?.length || 0,
+      konfigurationen_runden_kategorien: d.konfigurationen_runden_kategorien?.length || 0,
+      konfigurationen_runden_preise: d.konfigurationen_runden_preise?.length || 0,
     };
 
     return { success: true, counts };

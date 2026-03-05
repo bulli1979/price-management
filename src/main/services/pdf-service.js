@@ -7,10 +7,121 @@ import {
   getLottoById,
   getLottoDays,
   getRundenByLottoDay,
+  getAllKonfigurationen,
+  getKonfigurationRunden,
 } from "../db.js";
+
+function getChromePathCandidates() {
+  const localAppData = process.env.LOCALAPPDATA || "";
+  const programFiles = process.env.ProgramFiles || "C:\\Program Files";
+  const programFilesX86 =
+    process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+
+  return [
+    path.join(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
+    path.join(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
+    path.join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
+    path.join(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
+    path.join(
+      programFilesX86,
+      "Microsoft",
+      "Edge",
+      "Application",
+      "msedge.exe",
+    ),
+  ];
+}
+
+async function launchBrowserWithFallback() {
+  const launchErrors = [];
+
+  try {
+    return await puppeteer.launch();
+  } catch (error) {
+    launchErrors.push(error);
+  }
+
+  try {
+    return await puppeteer.launch({ channel: "chrome" });
+  } catch (error) {
+    launchErrors.push(error);
+  }
+
+  for (const executablePath of getChromePathCandidates()) {
+    try {
+      if (!executablePath || !fs.existsSync(executablePath)) continue;
+      return await puppeteer.launch({ executablePath });
+    } catch (error) {
+      launchErrors.push(error);
+    }
+  }
+
+  const lastError = launchErrors[launchErrors.length - 1];
+  throw new Error(
+    `Kein Chromium/Chrome gefunden. Letzter Fehler: ${
+      lastError?.message || "Unbekannter Fehler"
+    }`,
+  );
+}
 
 export function createPdfService({ app, dialog, shell, getMainWindow }) {
   let lastPdfExportFolder = null;
+
+  async function resolveKonfigNameForPreisblatt(runde, rundenMitPreisen) {
+    const konfigurationen = await getAllKonfigurationen();
+    if (!konfigurationen || konfigurationen.length === 0) {
+      return runde?.titel || "Configurationstitel";
+    }
+
+    const byName = new Map(
+      konfigurationen.map((cfg) => [String(cfg.name || "").trim().toLowerCase(), cfg.name])
+    );
+    const rundenTitel = String(runde?.titel || "").trim();
+    if (rundenTitel && byName.has(rundenTitel.toLowerCase())) {
+      return byName.get(rundenTitel.toLowerCase());
+    }
+
+    const usedRoundTitles = new Set();
+    for (const r of rundenMitPreisen || []) {
+      for (const p of r.preise || []) {
+        const title = String(p.runden_titel || "").trim();
+        if (title) usedRoundTitles.add(title);
+      }
+    }
+    if (usedRoundTitles.size === 0) {
+      return rundenTitel || "Configurationstitel";
+    }
+
+    const usedTitles = Array.from(usedRoundTitles);
+    let bestMatch = null;
+    let bestScore = -1;
+    let bestIsComplete = false;
+
+    for (const cfg of konfigurationen) {
+      const cfgRunden = await getKonfigurationRunden(cfg.id);
+      const cfgTitles = new Set(
+        (cfgRunden || []).map((row) => String(row.titel || "").trim()).filter(Boolean)
+      );
+      if (cfgTitles.size === 0) continue;
+
+      let score = 0;
+      for (const t of usedTitles) {
+        if (cfgTitles.has(t)) score += 1;
+      }
+      const isComplete = score === usedTitles.length;
+
+      if (
+        isComplete && !bestIsComplete ||
+        (isComplete === bestIsComplete && score > bestScore)
+      ) {
+        bestMatch = cfg.name;
+        bestScore = score;
+        bestIsComplete = isComplete;
+      }
+    }
+
+    return bestMatch || rundenTitel || "Configurationstitel";
+  }
 
   function getPdfFolder() {
     const pdfDir = path.join(app.getPath("userData"), "pdfs");
@@ -22,11 +133,14 @@ export function createPdfService({ app, dialog, shell, getMainWindow }) {
 
   async function selectPdfExportFolder(title) {
     const defaultPath = lastPdfExportFolder || app.getPath("documents");
-    const { filePaths, canceled } = await dialog.showOpenDialog(getMainWindow(), {
-      title,
-      defaultPath,
-      properties: ["openDirectory", "createDirectory"],
-    });
+    const { filePaths, canceled } = await dialog.showOpenDialog(
+      getMainWindow(),
+      {
+        title,
+        defaultPath,
+        properties: ["openDirectory", "createDirectory"],
+      },
+    );
 
     if (canceled || !filePaths || filePaths.length === 0) {
       return null;
@@ -37,7 +151,7 @@ export function createPdfService({ app, dialog, shell, getMainWindow }) {
   }
 
   async function renderPdf({ html, pdfPath }) {
-    const browser = await puppeteer.launch();
+    const browser = await launchBrowserWithFallback();
     try {
       const page = await browser.newPage();
       await page.setContent(html);
@@ -64,20 +178,50 @@ export function createPdfService({ app, dialog, shell, getMainWindow }) {
 
   async function exportPreisblattPDF(rundeId) {
     const runde = await getRundeById(rundeId);
-    const rundenPreise = await getRundenPreise(rundeId);
 
     if (!runde) {
       return { success: false, message: "Runde nicht gefunden" };
     }
 
-    const pdfDir = await selectPdfExportFolder("Zielordner für Preisblatt wählen");
+    const pdfDir = await selectPdfExportFolder(
+      "Zielordner für Preisblatt wählen",
+    );
     if (!pdfDir) {
       return { success: false, message: "Export abgebrochen" };
     }
 
-    const sorted = [...rundenPreise].sort((a, b) => a.preis - b.preis);
-    const html = generatePreisblattHTML(runde, sorted);
-    const pdfPath = path.join(pdfDir, `preisblatt_runde_${runde.rundennummer}.pdf`);
+    const tagesRunden = await getRundenByLottoDay(runde.lotto_day_id);
+    const sortedRunden = [...tagesRunden].sort(
+      (a, b) => (a.rundennummer || 0) - (b.rundennummer || 0),
+    );
+    const rundenMitPreisen = [];
+    for (const r of sortedRunden) {
+      const preise = await getRundenPreise(r.id);
+      const sortedPreise = [...preise].sort((a, b) => {
+        const roundSortDiff =
+          (parseInt(a.runden_sort_order) || 0) -
+          (parseInt(b.runden_sort_order) || 0);
+        if (roundSortDiff !== 0) return roundSortDiff;
+        const roundTitleDiff = String(a.runden_titel || "").localeCompare(
+          String(b.runden_titel || ""),
+          "de",
+        );
+        if (roundTitleDiff !== 0) return roundTitleDiff;
+        const catDiff = String(a.kategorie_name || "").localeCompare(
+          String(b.kategorie_name || ""),
+          "de",
+        );
+        if (catDiff !== 0) return catDiff;
+        const preisDiff = (a.preis || 0) - (b.preis || 0);
+        if (preisDiff !== 0) return preisDiff;
+        return String(a.name || "").localeCompare(String(b.name || ""), "de");
+      });
+      rundenMitPreisen.push({ ...r, preise: sortedPreise });
+    }
+
+    const konfigName = await resolveKonfigNameForPreisblatt(runde, rundenMitPreisen);
+    const html = generatePreisblattHTML(runde, rundenMitPreisen, konfigName);
+    const pdfPath = path.join(pdfDir, `preisblatt_tag_${runde.datum}.pdf`);
     await renderPdf({ html, pdfPath });
     return { success: true, path: pdfPath };
   }
@@ -90,14 +234,19 @@ export function createPdfService({ app, dialog, shell, getMainWindow }) {
       return { success: false, message: "Runde nicht gefunden" };
     }
 
-    const pdfDir = await selectPdfExportFolder("Zielordner für Übersicht wählen");
+    const pdfDir = await selectPdfExportFolder(
+      "Zielordner für Übersicht wählen",
+    );
     if (!pdfDir) {
       return { success: false, message: "Export abgebrochen" };
     }
 
     const sorted = [...rundenPreise].sort((a, b) => a.preis - b.preis);
     const html = generateUebersichtHTML(runde, sorted);
-    const pdfPath = path.join(pdfDir, `uebersicht_runde_${runde.rundennummer}.pdf`);
+    const pdfPath = path.join(
+      pdfDir,
+      `uebersicht_runde_${runde.rundennummer}.pdf`,
+    );
     await renderPdf({ html, pdfPath });
     return { success: true, path: pdfPath };
   }
@@ -112,7 +261,10 @@ export function createPdfService({ app, dialog, shell, getMainWindow }) {
       const runden = await getRundenByLottoDay(day.id);
       for (const r of runden) {
         const preise = await getRundenPreise(r.id);
-        const preissumme = preise.reduce((sum, p) => sum + p.preis * (p.rp_anzahl || 1), 0);
+        const preissumme = preise.reduce(
+          (sum, p) => sum + p.preis * (p.rp_anzahl || 1),
+          0,
+        );
         allRunden.push({
           ...r,
           day_date: day.date,
@@ -125,7 +277,10 @@ export function createPdfService({ app, dialog, shell, getMainWindow }) {
 
     const html = generateLottoHTML(lotto, days, allRunden);
     const pdfDir = getPdfFolder();
-    const pdfPath = path.join(pdfDir, `lotto_${lotto.name.replace(/[^a-zA-Z0-9äöüÄÖÜ]/g, "_")}.pdf`);
+    const pdfPath = path.join(
+      pdfDir,
+      `lotto_${lotto.name.replace(/[^a-zA-Z0-9äöüÄÖÜ]/g, "_")}.pdf`,
+    );
     await renderPdf({ html, pdfPath });
     return { success: true, path: pdfPath };
   }
@@ -154,7 +309,7 @@ export function createPdfService({ app, dialog, shell, getMainWindow }) {
 function generateRundeHTML(runde, rundenPreise) {
   const preissumme = rundenPreise.reduce(
     (sum, item) => sum + item.preis * (item.rp_anzahl || 1),
-    0
+    0,
   );
 
   return `
@@ -198,11 +353,11 @@ function generateRundeHTML(runde, rundenPreise) {
                     (item) => `
                     <tr>
                         <td class="category">${item.kategorie_name}</td>
-                        <td>${item.name}${(item.rp_anzahl || 1) > 1 ? ' <span style="color:#6b7280">(×' + item.rp_anzahl + ')</span>' : ""}</td>
+                        <td>${item.name}${(item.rp_anzahl || 1) > 1 ? ' <span style="color:#6b7280">(×' + item.rp_anzahl + ")</span>" : ""}</td>
                         <td>${item.herkunft || "—"}</td>
                         <td>${formatCurrency(item.preis * (item.rp_anzahl || 1))}</td>
                     </tr>
-                `
+                `,
                   )
                   .join("")}
             </tbody>
@@ -216,24 +371,52 @@ function generateRundeHTML(runde, rundenPreise) {
   `;
 }
 
-function generatePreisblattHTML(runde, preise) {
-  const groups = {};
-  for (const p of preise) {
-    const kat = p.kategorie_name || "Ohne Kategorie";
-    if (!groups[kat]) groups[kat] = [];
-    groups[kat].push(p);
+function generatePreisblattHTML(runde, rundenMitPreisen, konfigName = null) {
+  const configTitel =
+    (konfigName && String(konfigName).trim()) ||
+    (rundenMitPreisen || [])
+      .map((item) => (item?.titel ? String(item.titel).trim() : ""))
+      .find(Boolean) ||
+    "Configurationstitel";
+
+  const roundGroups = new Map();
+  for (const r of rundenMitPreisen) {
+    for (const p of r.preise) {
+      const roundTitle = p.runden_titel || "Ohne Rundentitel";
+      if (!roundGroups.has(roundTitle)) {
+        roundGroups.set(roundTitle, {
+          sortOrder: Number.isFinite(parseInt(p.runden_sort_order))
+            ? parseInt(p.runden_sort_order)
+            : Number.MAX_SAFE_INTEGER,
+          items: [],
+        });
+      }
+      const group = roundGroups.get(roundTitle);
+      if (Number.isFinite(parseInt(p.runden_sort_order))) {
+        group.sortOrder = Math.min(group.sortOrder, parseInt(p.runden_sort_order));
+      }
+      group.items.push(p);
+    }
   }
 
+  const sortedRoundEntries = Array.from(roundGroups.entries()).sort((a, b) => {
+    const bySort = (a[1].sortOrder || 0) - (b[1].sortOrder || 0);
+    if (bySort !== 0) return bySort;
+    return String(a[0]).localeCompare(String(b[0]), "de");
+  });
+
   let tableRows = "";
-  for (const [katName, items] of Object.entries(groups)) {
-    tableRows += `<tr class="category-header"><td colspan="3">${katName}</td></tr>`;
-    for (const item of items) {
-      tableRows += `
-        <tr>
-          <td>${item.name}${(item.rp_anzahl || 1) > 1 ? ' <span style="color:#6b7280">(×' + item.rp_anzahl + ')</span>' : ""}</td>
-          <td>${item.herkunft || "—"}</td>
-          <td class="price">${formatCurrency(item.preis * (item.rp_anzahl || 1))}</td>
-        </tr>`;
+  for (const [roundTitle, group] of sortedRoundEntries) {
+    const sortedItems = [...group.items].sort((a, b) => {
+      const preisDiff = (a.preis || 0) - (b.preis || 0);
+      if (preisDiff !== 0) return preisDiff;
+      return String(a.name || "").localeCompare(String(b.name || ""), "de");
+    });
+
+    tableRows += `<tr class="round-title-row"><td>${roundTitle}</td></tr>`;
+    for (const item of sortedItems) {
+      const preisName = `${item.name}${(item.rp_anzahl || 1) > 1 ? ` (x${item.rp_anzahl})` : ""}`;
+      tableRows += `<tr><td>${preisName}</td></tr>`;
     }
   }
 
@@ -242,29 +425,33 @@ function generatePreisblattHTML(runde, preise) {
     <html>
     <head>
       <meta charset="UTF-8">
-      <title>Preisblatt Runde ${runde.rundennummer}</title>
+      <title>Preisblatt Tag ${runde.datum}</title>
       <style>
         body { font-family: Arial, sans-serif; margin: 30px; color: #333; }
         h1 { color: #2563eb; text-align: center; margin-bottom: 5px; font-size: 22px; }
         .subtitle { text-align: center; color: #666; margin-bottom: 25px; font-size: 14px; }
+        .spielrunde-label { font-size: 14px; font-weight: 600; color: #1f2937; margin-bottom: 8px; }
         table { width: 100%; border-collapse: collapse; }
         th { background-color: #2563eb; color: white; padding: 10px 12px; text-align: left; font-size: 13px; }
+        .header-cell { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+        .header-right { text-align: right; opacity: 0.95; font-weight: 600; }
         td { padding: 8px 12px; border-bottom: 1px solid #e5e7eb; font-size: 13px; }
         tr:nth-child(even) { background-color: #f9fafb; }
-        .category-header td { background-color: #eff6ff; font-weight: bold; color: #1e40af; padding: 10px 12px; font-size: 14px; border-bottom: 2px solid #bfdbfe; }
-        .price { text-align: right; font-weight: 600; color: #059669; }
-        th:last-child { text-align: right; }
+        .round-title-row td { background-color: #eff6ff; font-weight: bold; color: #1e40af; padding: 9px 12px; font-size: 13px; border-top: 2px solid #bfdbfe; }
+        th:last-child, td:last-child { width: 150px; text-align: left; }
       </style>
     </head>
     <body>
-      <h1>Preisblatt — Runde ${runde.rundennummer}</h1>
-      <div class="subtitle">Datum: ${runde.datum}</div>
+      <div class="spielrunde-label">Spielrunde ${runde.rundennummer}</div>
       <table>
         <thead>
           <tr>
-            <th>Preis</th>
-            <th>Herkunft</th>
-            <th style="text-align: right">Wert (CHF)</th>
+            <th>
+              <div class="header-cell">
+                <span>${configTitel} - Preise</span>
+                <span class="header-right">${String(runde.additional_title_text || "").trim() || ""}</span>
+              </div>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -277,7 +464,10 @@ function generatePreisblattHTML(runde, preise) {
 }
 
 function generateUebersichtHTML(runde, preise) {
-  const preissumme = preise.reduce((sum, p) => sum + p.preis * (p.rp_anzahl || 1), 0);
+  const preissumme = preise.reduce(
+    (sum, p) => sum + p.preis * (p.rp_anzahl || 1),
+    0,
+  );
   const geldeinsatz = runde.price_amount || runde.ausgaben || 0;
 
   let rows = "";
@@ -286,7 +476,7 @@ function generateUebersichtHTML(runde, preise) {
     rows += `
       <tr>
         <td class="nr">${nr++}</td>
-        <td>${p.name}${(p.rp_anzahl || 1) > 1 ? ' <span style="color:#6b7280">(×' + p.rp_anzahl + ')</span>' : ""}</td>
+        <td>${p.name}${(p.rp_anzahl || 1) > 1 ? ' <span style="color:#6b7280">(×' + p.rp_anzahl + ")</span>" : ""}</td>
         <td class="price">${formatCurrency(p.preis * (p.rp_anzahl || 1))}</td>
       </tr>`;
   }
@@ -356,8 +546,14 @@ function generateUebersichtHTML(runde, preise) {
 function generateLottoHTML(lotto, days, allRunden) {
   const totalEinnahmen = allRunden.reduce((s, r) => s + (r.einnahmen || 0), 0);
   const totalAusgaben = allRunden.reduce((s, r) => s + (r.ausgaben || 0), 0);
-  const totalPreissumme = allRunden.reduce((s, r) => s + (r.preissumme || 0), 0);
-  const totalPriceAmount = allRunden.reduce((s, r) => s + (r.price_amount || 0), 0);
+  const totalPreissumme = allRunden.reduce(
+    (s, r) => s + (r.preissumme || 0),
+    0,
+  );
+  const totalPriceAmount = allRunden.reduce(
+    (s, r) => s + (r.price_amount || 0),
+    0,
+  );
   const totalGastro = days.reduce((s, d) => s + (d.gastro_revenue || 0), 0);
   const totalSpenden = days.reduce((s, d) => s + (d.donations || 0), 0);
 
@@ -373,7 +569,10 @@ function generateLottoHTML(lotto, days, allRunden) {
     const dayRunden = rundenByDay[day.day_number] || [];
     const dayEinnahmen = dayRunden.reduce((s, r) => s + (r.einnahmen || 0), 0);
     const dayAusgaben = dayRunden.reduce((s, r) => s + (r.ausgaben || 0), 0);
-    const dayPreissumme = dayRunden.reduce((s, r) => s + (r.preissumme || 0), 0);
+    const dayPreissumme = dayRunden.reduce(
+      (s, r) => s + (r.preissumme || 0),
+      0,
+    );
     const dayGastro = day.gastro_revenue || 0;
     const daySpenden = day.donations || 0;
 
@@ -392,7 +591,9 @@ function generateLottoHTML(lotto, days, allRunden) {
             </tr>
           </thead>
           <tbody>
-            ${dayRunden.map((r) => `
+            ${dayRunden
+              .map(
+                (r) => `
               <tr>
                 <td>Runde ${r.rundennummer}</td>
                 <td style="text-align:right">${formatCurrency(r.einnahmen || 0)}</td>
@@ -401,7 +602,9 @@ function generateLottoHTML(lotto, days, allRunden) {
                 <td style="text-align:right;font-weight:600">${formatCurrency(r.preissumme || 0)}</td>
                 <td style="text-align:center">${r.preisCount}</td>
               </tr>
-            `).join("")}
+            `,
+              )
+              .join("")}
           </tbody>
           <tfoot>
             <tr class="day-total">
@@ -488,7 +691,7 @@ function generateLottoHTML(lotto, days, allRunden) {
         </div>
         <div class="total-row main">
           <span class="label">Gewinn / Verlust</span>
-          <span class="${(totalEinnahmen + totalGastro + totalSpenden) - totalAusgaben >= 0 ? "profit" : "loss"}">${formatCurrency((totalEinnahmen + totalGastro + totalSpenden) - totalAusgaben)}</span>
+          <span class="${totalEinnahmen + totalGastro + totalSpenden - totalAusgaben >= 0 ? "profit" : "loss"}">${formatCurrency(totalEinnahmen + totalGastro + totalSpenden - totalAusgaben)}</span>
         </div>
       </div>
     </body>

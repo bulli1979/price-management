@@ -53,7 +53,8 @@
               </button>
               <div>
                 <h1 class="text-xl font-bold text-gray-800">
-                  Runde <span x-text="aktuelleRunde ? aktuelleRunde.rundennummer : ''"></span>
+                  Spielrunde <span x-text="aktuelleRunde ? aktuelleRunde.rundennummer : ''"></span>
+                  <span x-show="getAktuelleRundeTitelLabel()" class="text-base font-medium text-gray-600 ml-2" x-text="getAktuelleRundeTitelLabel()"></span>
                 </h1>
                 <p class="text-sm text-gray-500">
                   <span x-text="aktuellesLotto ? aktuellesLotto.name : ''"></span> — 
@@ -138,22 +139,51 @@
               <!-- Kategorien mit bearbeitbarer Anzahl -->
               <div x-show="hasAktuelleRundeKategorien()" class="mt-2 space-y-1">
                 <div class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Kategorien / Anzahl</div>
-                <template x-for="kat in getAktuelleRundeKategorienList()" :key="kat.kategorie_id">
-                  <div class="flex items-center justify-between bg-white rounded px-2 py-1 border border-gray-200">
-                    <span class="text-xs text-gray-700 flex-1 truncate" x-text="kat.kategorie_name"></span>
-                    <div class="flex items-center space-x-1 ml-2 text-xs">
-                      <span class="text-gray-400">Von/Bis:</span>
-                      <span class="text-gray-700" x-text="(kat.anzahl_min ?? kat.anzahl ?? 0) + '-' + (kat.anzahl_max ?? kat.anzahl ?? 0)"></span>
-                    </div>
+                <template x-for="[titel, kategorien] in getAktuelleRundeKategorienByTitelEntries()" :key="titel">
+                  <div class="space-y-1">
+                    <div class="text-xs font-semibold text-blue-700 px-1" x-text="titel"></div>
+                    <template x-for="kat in kategorien" :key="kat.id || (kat.kategorie_id + '-' + titel)">
+                      <div class="flex items-center justify-between bg-white rounded px-2 py-1 border border-gray-200">
+                        <span class="text-xs text-gray-700 flex-1 truncate" x-text="kat.kategorie_name"></span>
+                        <div class="flex items-center space-x-1 ml-2 text-xs">
+                          <span class="text-gray-400">Von/Bis:</span>
+                          <span class="text-gray-700" x-text="(kat.anzahl_min ?? kat.anzahl ?? 0) + '-' + (kat.anzahl_max ?? kat.anzahl ?? 0)"></span>
+                        </div>
+                      </div>
+                    </template>
                   </div>
                 </template>
+              </div>
+              <div x-show="getAktuelleTagRundenTitelList().length > 0" class="mt-2 space-y-1">
+                <div class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Spielrunden im Tag</div>
+                <template x-for="rt in getAktuelleTagRundenTitelList()" :key="rt.id">
+                  <div class="text-xs text-gray-600" :class="aktuelleRunde && rt.id === aktuelleRunde.id ? 'font-semibold text-blue-700' : ''" x-text="rt.label"></div>
+                </template>
+              </div>
+              <div x-show="getAktuelleRundenTitelOptionen().length > 0" class="mt-2">
+                <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Manuell hinzufügen zu</label>
+                <select
+                  x-model="selectedRundenTitelForManualAdd"
+                  class="w-full border border-gray-300 rounded px-2 py-1 text-xs"
+                >
+                  <option value="__AUTO__">Automatisch (nach Preisbereich)</option>
+                  <template x-for="titel in getAktuelleRundenTitelOptionen()" :key="titel">
+                    <option :value="titel" x-text="titel"></option>
+                  </template>
+                </select>
               </div>
             </div>
             
             <div class="flex-1 overflow-y-auto p-3 space-y-1">
               <!-- Gruppiert nach Kategorie -->
-              <template x-for="[katName, preise] in getRundePreiseGroupedEntries()" :key="katName">
-                <div class="mb-3">
+              <template x-for="[katName, preise] in getRundePreiseByKonfigRundeEntries()" :key="katName">
+                <div
+                  class="mb-3 rounded-lg border border-transparent"
+                  :class="{ 'drag-over border-blue-400 bg-blue-50/40': dragOverRundenTitel === katName }"
+                  @dragover.prevent="handleDragOver($event); dragOverRundenTitel = katName"
+                  @dragleave="if (dragOverRundenTitel === katName) dragOverRundenTitel = null"
+                  @drop="handleDropToRunde($event, katName)"
+                >
                   <div class="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1 px-2" x-text="katName"></div>
                   <template x-for="rp in preise" :key="rp.id">
                     <div
@@ -247,7 +277,7 @@
                   <div
                     class="preis-card bg-white border rounded-lg p-3 shadow-sm"
                     :class="{ 'in-runde': isPreisInRunde(preis.id), 'border-gray-200': !isPreisInRunde(preis.id) }"
-                    @click="addPreisToRundeEditor(preis)"
+                    @click="addPreisToRundeEditor(preis, { preferredRundenTitel: selectedRundenTitelForManualAdd })"
                   >
                     <div class="flex justify-between items-start mb-1">
                       <h4 class="font-medium text-sm text-gray-800 truncate flex-1" x-text="preis.name"></h4>
@@ -336,16 +366,25 @@
           <div class="grid grid-cols-3 gap-3">
             <div>
               <label class="block text-xs text-gray-500 mb-1">Einnahmen</label>
-              <input x-ref="rundeDraftEinnahmenInput" type="text" inputmode="decimal" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm" />
+              <input x-model="rundeDraftEinnahmen" type="text" inputmode="decimal" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm" />
             </div>
             <div>
               <label class="block text-xs text-gray-500 mb-1">Ausgaben</label>
-              <input x-ref="rundeDraftAusgabenInput" type="text" inputmode="decimal" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm" />
+              <input x-model="rundeDraftAusgaben" type="text" inputmode="decimal" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm" />
             </div>
             <div>
               <label class="block text-xs text-blue-600 mb-1 font-semibold">Eingesetzter Betrag</label>
-              <input x-ref="rundeDraftPriceAmountInput" type="text" inputmode="decimal" class="w-full border-2 border-blue-400 rounded px-2 py-1.5 text-sm bg-blue-50 font-semibold" />
+              <input x-model="rundeDraftPriceAmount" type="text" inputmode="decimal" class="w-full border-2 border-blue-400 rounded px-2 py-1.5 text-sm bg-blue-50 font-semibold" />
             </div>
+          </div>
+          <div class="mt-3">
+            <label class="block text-xs text-gray-500 mb-1">Zusätzlicher Titeltext</label>
+            <input
+              x-model="rundeDraftAdditionalTitleText"
+              type="text"
+              class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+              placeholder="z.B. Sonderpreise"
+            />
           </div>
 
           <div class="mt-4 border-t border-gray-200 pt-3">
@@ -594,16 +633,8 @@
                     </div>
                   </div>
                   <div class="mt-2">
-                    <div x-show="!hasKonfigKategorien(config)" class="text-sm text-gray-500 italic">Keine Kategorien</div>
-                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-                      <template x-for="kk in getKonfigKategorien(config)" :key="kk.kategorie_id">
-                        <div class="bg-gray-50 rounded px-3 py-2 flex items-center justify-between">
-                          <div>
-                            <span class="font-medium text-sm" x-text="kk.kategorie_name"></span>
-                            <span class="text-xs text-gray-500 ml-1">(<span x-text="kk.anzahl_min"></span>-<span x-text="kk.anzahl_max"></span> Stk.)</span>
-                          </div>
-                        </div>
-                      </template>
+                    <div class="mt-3 text-sm text-gray-600">
+                      Runden: <span class="font-semibold" x-text="getKonfigRunden(config).length"></span>
                     </div>
                 </div>
               </div>
@@ -631,47 +662,69 @@
                 </div>
               </div>
 
-              <div class="mb-4">
-                <h4 class="font-medium text-gray-700 mb-2">Zugewiesene Kategorien</h4>
-                <div x-show="editingKonfigKategorien.length === 0" class="text-sm text-gray-500 italic py-2">Noch keine Kategorien</div>
-                <div class="space-y-2">
-                  <template x-for="(kk, idx) in editingKonfigKategorien" :key="kk.kategorie_id">
-                    <div class="flex items-center space-x-3 bg-gray-50 rounded-lg p-3">
-                      <span class="font-medium text-sm flex-1" x-text="kk.kategorie_name"></span>
-                      <div class="flex items-center space-x-2">
-                        <label class="text-xs text-gray-500">Min:</label>
-                        <input type="text" inputmode="numeric" x-model.number="kk.anzahl_min" class="w-16 border border-gray-300 rounded px-2 py-1 text-sm" @change="updateKonfigKategorie(kk)" />
-                        <label class="text-xs text-gray-500">Max:</label>
-                        <input type="text" inputmode="numeric" x-model.number="kk.anzahl_max" class="w-16 border border-gray-300 rounded px-2 py-1 text-sm" @change="updateKonfigKategorie(kk)" />
-                        <span class="text-xs text-gray-400">(<span x-text="formatCurrency(kk.wert1)"></span> - <span x-text="formatCurrency(kk.wert2)"></span>)</span>
-                        <button @click="removeKategorieVonKonfig(kk.kategorie_id)" class="text-red-600 hover:text-red-800 text-sm ml-2" title="Kategorie entfernen">✕</button>
+              <div class="border-t pt-4 mt-4">
+                <h4 class="font-medium text-gray-700 mb-2">Runden in Konfiguration</h4>
+                <div class="flex items-end space-x-3 mb-3">
+                  <div class="flex-1">
+                    <label class="block text-xs text-gray-500 mb-1">Rundentitel</label>
+                    <input type="text" x-model="newKonfigRundeTitel" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" placeholder="z.B. 2 Zahlen übereinander" />
+                  </div>
+                  <button @click="addKonfigRunde()" class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm">Runde hinzufügen</button>
+                </div>
+
+                <div x-show="editingKonfigRunden.length === 0" class="text-sm text-gray-500 italic py-2">
+                  Noch keine Runden definiert.
+                </div>
+
+                <div class="space-y-3">
+                  <template x-for="runde in editingKonfigRunden" :key="runde.id">
+                    <div class="border border-gray-200 rounded-lg p-3">
+                      <div class="flex items-center gap-2 mb-2">
+                        <input type="text" x-model="runde.titel" class="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm" />
+                        <button @click="moveKonfigRunde(runde.id, 'up')" class="px-2 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-xs" title="Nach oben">↑</button>
+                        <button @click="moveKonfigRunde(runde.id, 'down')" class="px-2 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-xs" title="Nach unten">↓</button>
+                        <button @click="saveKonfigRunde(runde)" class="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs">Titel speichern</button>
+                        <button @click="deleteKonfigRunde(runde.id)" class="px-3 py-2 bg-red-600 text-white rounded hover:bg-red-700 text-xs">Löschen</button>
+                      </div>
+
+                      <div class="flex items-end gap-2 mb-2">
+                        <div class="flex-1">
+                          <label class="block text-xs text-gray-500 mb-1">Kategorie hinzufügen</label>
+                          <select x-model="runde._newKategorieId" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm">
+                            <option value="">-- Kategorie wählen --</option>
+                            <template x-for="kat in getAvailableKategorienForKonfigRunde(runde)" :key="kat.id">
+                              <option :value="kat.id" x-text="kat.name + ' (' + formatCurrency(kat.wert1) + ' - ' + formatCurrency(kat.wert2) + ')'"></option>
+                            </template>
+                          </select>
+                        </div>
+                        <div>
+                          <label class="block text-xs text-gray-500 mb-1">Min</label>
+                          <input type="text" inputmode="numeric" x-model.number="runde._newAnzahlMin" class="w-14 text-center border border-gray-300 rounded px-1 py-2 text-xs" />
+                        </div>
+                        <div>
+                          <label class="block text-xs text-gray-500 mb-1">Max</label>
+                          <input type="text" inputmode="numeric" x-model.number="runde._newAnzahlMax" class="w-14 text-center border border-gray-300 rounded px-1 py-2 text-xs" />
+                        </div>
+                        <button @click="addKategorieToKonfigRunde(runde)" class="px-3 py-2 bg-emerald-600 text-white rounded hover:bg-emerald-700 text-xs" :disabled="!runde._newKategorieId">Kategorie zuweisen</button>
+                      </div>
+
+                      <div class="space-y-1">
+                        <template x-for="kk in runde._kategorien" :key="kk.id">
+                          <div class="flex items-center gap-2 bg-gray-50 rounded px-2 py-1.5">
+                            <span class="text-sm flex-1" x-text="kk.kategorie_name"></span>
+                            <span class="text-xs text-gray-500">Min</span>
+                            <input type="text" inputmode="numeric" x-model.number="kk.anzahl_min" @change="updateKonfigRundeKategorie(kk)" class="w-14 text-center border border-gray-300 rounded px-1 py-1 text-xs" />
+                            <span class="text-xs text-gray-500">Max</span>
+                            <input type="text" inputmode="numeric" x-model.number="kk.anzahl_max" @change="updateKonfigRundeKategorie(kk)" class="w-14 text-center border border-gray-300 rounded px-1 py-1 text-xs" />
+                            <button @click="removeKategorieFromKonfigRunde(kk.id)" class="text-red-600 hover:text-red-800 text-sm">✕</button>
+                          </div>
+                        </template>
+                        <div x-show="!runde._kategorien || runde._kategorien.length === 0" class="text-xs text-gray-500 italic">
+                          Noch keine Kategorien in dieser Runde.
+                        </div>
                       </div>
                     </div>
                   </template>
-                </div>
-              </div>
-
-              <div class="border-t pt-4">
-                <h4 class="font-medium text-gray-700 mb-2">Kategorie hinzufügen</h4>
-                <div class="flex items-end space-x-3">
-                  <div class="flex-1">
-                    <label class="block text-xs text-gray-500 mb-1">Kategorie</label>
-                    <select x-model="newKonfigKategorie.kategorieId" class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm">
-                      <option value="">-- Kategorie wählen --</option>
-                      <template x-for="kat in availableKategorienForKonfig" :key="kat.id">
-                        <option :value="kat.id" x-text="kat.name + ' (' + formatCurrency(kat.wert1) + ' - ' + formatCurrency(kat.wert2) + ')'"></option>
-                      </template>
-                    </select>
-                  </div>
-                  <div>
-                    <label class="block text-xs text-gray-500 mb-1">Min</label>
-                    <input type="text" inputmode="numeric" x-model.number="newKonfigKategorie.anzahlMin" class="w-20 border border-gray-300 rounded-md px-3 py-2 text-sm" />
-                  </div>
-                  <div>
-                    <label class="block text-xs text-gray-500 mb-1">Max</label>
-                    <input type="text" inputmode="numeric" x-model.number="newKonfigKategorie.anzahlMax" class="w-20 border border-gray-300 rounded-md px-3 py-2 text-sm" />
-                  </div>
-                  <button @click="addKategorieToKonfig()" class="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm" :disabled="!newKonfigKategorie.kategorieId">Hinzufügen</button>
                 </div>
               </div>
 
@@ -848,7 +901,7 @@
                     <div class="flex justify-between items-center">
                 <div>
                         <h4 class="font-semibold text-gray-800">
-                          Runde <span x-text="runde.rundennummer"></span>
+                          Spielrunde <span x-text="runde.rundennummer"></span>
                         </h4>
                         <p class="text-sm text-gray-600 mt-1">
                           Einnahmen: <span x-text="formatCurrency(runde.einnahmen || 0)"></span> |
@@ -860,6 +913,10 @@
                           @click="openRundeEditor(runde.id)"
                           class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
                         >📝 Bearbeiten</button>
+                        <button
+                          @click="deleteRundeFromLottoDay(runde.id)"
+                          class="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 text-sm"
+                        >🗑️ Löschen</button>
                       </div>
                     </div>
                   </div>
@@ -1218,19 +1275,25 @@
                       <span class="text-sm font-medium text-gray-700">Konfiguration verwenden</span>
                     </label>
                     <div x-show="newRunde.useConfig" class="mt-2">
-                      <select x-model.number="newRunde.configId" @change="onKonfigurationChange($event)" class="block w-full border border-gray-300 rounded-md px-3 py-2">
+                      <select x-model="newRunde.configId" @change="onKonfigurationChange($event)" class="block w-full border border-gray-300 rounded-md px-3 py-2">
                         <option value="">-- Konfiguration wählen --</option>
                         <template x-for="config in konfigurationen" :key="config.id">
                           <option :value="config.id" x-text="config.name"></option>
                         </template>
                       </select>
+                    <div x-show="newRundeConfigRundenPreview.length > 0" class="mt-2 bg-blue-50 border border-blue-200 rounded p-2">
+                      <div class="text-xs font-semibold text-blue-700 mb-1">Übernommene Runden</div>
+                      <template x-for="(line, idx) in newRundeConfigRundenPreview" :key="idx">
+                        <div class="text-xs text-blue-800" x-text="line"></div>
+                      </template>
+                    </div>
                     </div>
                   </div>
 
                   <!-- Gewinnrunden -->
                   <div>
                     <label class="block text-sm font-medium text-gray-700">Anzahl Gewinnrunden</label>
-                    <input type="text" inputmode="numeric" x-model.number="newRunde.gewinnrunden" required class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" />
+                    <input type="text" inputmode="numeric" x-model="newRunde.gewinnrunden" required class="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2" />
                   </div>
 
                   <!-- Einnahmen und Ausgaben -->
@@ -1248,14 +1311,14 @@
                     </div>
                     <div>
                       <label class="block text-sm font-medium text-blue-700 font-semibold">Eingesetzter Betrag (CHF)</label>
-                      <input type="text" inputmode="decimal" x-model="newRunde.priceAmount" class="mt-1 block w-full border-2 border-blue-400 rounded-md px-3 py-2 bg-blue-50 font-semibold" />
+                      <input type="text" inputmode="decimal" x-model="newRunde.priceAmount" @focus="newRundePriceAmountManuallyEdited = true; $event.target.select()" @input="onNewRundePriceAmountInput()" class="mt-1 block w-full border-2 border-blue-400 rounded-md px-3 py-2 bg-blue-50 font-semibold" />
                       <p x-show="newRundeErrors.priceAmount" x-text="newRundeErrors.priceAmount" class="mt-1 text-xs text-red-600"></p>
                       <p class="text-xs text-blue-500 mt-1">Steuert die Preisverteilung pro Runde</p>
                     </div>
                   </div>
 
                   <!-- Kategorien -->
-                  <div>
+                  <div x-show="!newRunde.useConfig">
                     <div class="flex justify-between items-center mb-2">
                       <label class="block text-sm font-medium text-gray-700">Kategorien</label>
                       <button type="button" @click="addKategorieToRunde()" class="text-sm text-blue-600 hover:text-blue-800">+ Kategorie hinzufügen</button>
@@ -1284,7 +1347,7 @@
                             <input
                               type="text"
                               inputmode="numeric"
-                              x-model.number="kat.anzahlMin"
+                              x-model="kat.anzahlMin"
                               required
                               class="w-16 border border-gray-300 rounded-md px-2 py-1"
                             />
@@ -1292,7 +1355,7 @@
                             <input
                               type="text"
                               inputmode="numeric"
-                              x-model.number="kat.anzahlMax"
+                              x-model="kat.anzahlMax"
                               required
                               class="w-16 border border-gray-300 rounded-md px-2 py-1"
                             />
@@ -1302,6 +1365,9 @@
                       </template>
                       <div x-show="newRunde.kategorien.length === 0" class="text-sm text-gray-500 text-center py-4">Noch keine Kategorien</div>
                     </div>
+                  </div>
+                  <div x-show="newRunde.useConfig" class="text-sm text-gray-600 bg-blue-50 border border-blue-200 rounded p-3">
+                    Kategorien werden aus den konfigurierten Runden übernommen.
                   </div>
                 </div>
 

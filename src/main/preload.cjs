@@ -87,6 +87,30 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("remove-kategorie-von-konfiguration", konfigurationId, kategorieId),
   updateKonfigurationKategorie: (konfigurationId, kategorieId, anzahlMin, anzahlMax) =>
     ipcRenderer.invoke("update-konfiguration-kategorie", konfigurationId, kategorieId, anzahlMin, anzahlMax),
+  getKonfigurationRunden: (konfigurationId) =>
+    ipcRenderer.invoke("get-konfiguration-runden", konfigurationId),
+  addKonfigurationRunde: (konfigurationId, titel, sortOrder) =>
+    ipcRenderer.invoke("add-konfiguration-runde", konfigurationId, titel, sortOrder),
+  updateKonfigurationRunde: (rundeId, titel, sortOrder) =>
+    ipcRenderer.invoke("update-konfiguration-runde", rundeId, titel, sortOrder),
+  deleteKonfigurationRunde: (rundeId) =>
+    ipcRenderer.invoke("delete-konfiguration-runde", rundeId),
+  getKonfigurationRundenPreise: (konfigurationRundeId) =>
+    ipcRenderer.invoke("get-konfiguration-runden-preise", konfigurationRundeId),
+  getKonfigurationRundenKategorien: (konfigurationRundeId) =>
+    ipcRenderer.invoke("get-konfiguration-runden-kategorien", konfigurationRundeId),
+  addKategorieZuKonfigurationRunde: (konfigurationRundeId, kategorieId, anzahlMin, anzahlMax) =>
+    ipcRenderer.invoke("add-kategorie-zu-konfiguration-runde", konfigurationRundeId, kategorieId, anzahlMin, anzahlMax),
+  updateKonfigurationRundeKategorie: (konfigurationRundeKategorieId, anzahlMin, anzahlMax) =>
+    ipcRenderer.invoke("update-konfiguration-runde-kategorie", konfigurationRundeKategorieId, anzahlMin, anzahlMax),
+  removeKategorieVonKonfigurationRunde: (konfigurationRundeKategorieId) =>
+    ipcRenderer.invoke("remove-kategorie-von-konfiguration-runde", konfigurationRundeKategorieId),
+  addPreisZuKonfigurationRunde: (konfigurationRundeId, preisId, anzahl) =>
+    ipcRenderer.invoke("add-preis-zu-konfiguration-runde", konfigurationRundeId, preisId, anzahl),
+  updateKonfigurationRundePreis: (rundenPreisId, anzahl) =>
+    ipcRenderer.invoke("update-konfiguration-runde-preis", rundenPreisId, anzahl),
+  removePreisVonKonfigurationRunde: (rundenPreisId) =>
+    ipcRenderer.invoke("remove-preis-von-konfiguration-runde", rundenPreisId),
   deleteKonfiguration: (id) => ipcRenderer.invoke("delete-konfiguration", id),
 
   // Runden-Funktionen
@@ -97,7 +121,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     einnahmen,
     ausgaben,
     kategorien,
-    priceAmount
+    priceAmount,
+    titel
   ) =>
     ipcRenderer.invoke(
       "create-runde",
@@ -107,18 +132,20 @@ contextBridge.exposeInMainWorld("electronAPI", {
       einnahmen,
       ausgaben,
       kategorien,
-      priceAmount
+      priceAmount,
+      titel
     ),
 
   getAllRunden: () => ipcRenderer.invoke("get-all-runden"),
 
   getRundeById: (id) => ipcRenderer.invoke("get-runde-by-id", id),
+  deleteRunde: (rundeId) => ipcRenderer.invoke("delete-runde", rundeId),
 
   getRundenKategorien: (rundeId) =>
     ipcRenderer.invoke("get-runden-kategorien", rundeId),
 
-  addPreisZuRunde: (rundeId, preisId, kategorieId) =>
-    ipcRenderer.invoke("add-preis-zu-runde", rundeId, preisId, kategorieId),
+  addPreisZuRunde: (rundeId, preisId, kategorieId, rundenTitel = null, rundenSortOrder = 0) =>
+    ipcRenderer.invoke("add-preis-zu-runde", rundeId, preisId, kategorieId, rundenTitel, rundenSortOrder),
 
   removePreisVonRunde: (rundeId, preisId) =>
     ipcRenderer.invoke("remove-preis-von-runde", rundeId, preisId),
@@ -128,8 +155,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   updateRundenPreisAnzahl: (rundenPreisId, anzahl) =>
     ipcRenderer.invoke("update-runden-preis-anzahl", rundenPreisId, anzahl),
 
-  updateRunde: (id, einnahmen, ausgaben, priceAmount) =>
-    ipcRenderer.invoke("update-runde", id, einnahmen, ausgaben, priceAmount),
+  updateRunde: (id, einnahmen, ausgaben, priceAmount, additionalTitleText = undefined) =>
+    ipcRenderer.invoke("update-runde", id, einnahmen, ausgaben, priceAmount, additionalTitleText),
   updateRundenKategorie: (rundeId, kategorieId, anzahl) =>
     ipcRenderer.invoke("update-runden-kategorie", rundeId, kategorieId, anzahl),
   updateRundenKategorieRange: (rundeId, kategorieId, anzahlMin, anzahlMax) =>
