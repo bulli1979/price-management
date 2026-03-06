@@ -6,7 +6,6 @@ import {
   getRundenPreise,
   getLottoById,
   getLottoDays,
-  getRundenByLottoDay,
   getAllKonfigurationen,
   getKonfigurationRunden,
 } from "../db.js";
@@ -197,34 +196,27 @@ export function createPdfService({ app, dialog, shell, getMainWindow }) {
       return { success: false, message: "Export abgebrochen" };
     }
 
-    const tagesRunden = await getRundenByLottoDay(runde.lotto_day_id);
-    const sortedRunden = [...tagesRunden].sort(
-      (a, b) => (a.rundennummer || 0) - (b.rundennummer || 0),
+  const preise = await getRundenPreise(runde.id);
+  const sortedPreise = [...preise].sort((a, b) => {
+    const roundSortDiff =
+      (parseInt(a.runden_sort_order) || 0) -
+      (parseInt(b.runden_sort_order) || 0);
+    if (roundSortDiff !== 0) return roundSortDiff;
+    const roundTitleDiff = String(a.runden_titel || "").localeCompare(
+      String(b.runden_titel || ""),
+      "de",
     );
-    const rundenMitPreisen = [];
-    for (const r of sortedRunden) {
-      const preise = await getRundenPreise(r.id);
-      const sortedPreise = [...preise].sort((a, b) => {
-        const roundSortDiff =
-          (parseInt(a.runden_sort_order) || 0) -
-          (parseInt(b.runden_sort_order) || 0);
-        if (roundSortDiff !== 0) return roundSortDiff;
-        const roundTitleDiff = String(a.runden_titel || "").localeCompare(
-          String(b.runden_titel || ""),
-          "de",
-        );
-        if (roundTitleDiff !== 0) return roundTitleDiff;
-        const catDiff = String(a.kategorie_name || "").localeCompare(
-          String(b.kategorie_name || ""),
-          "de",
-        );
-        if (catDiff !== 0) return catDiff;
-        const preisDiff = (a.preis || 0) - (b.preis || 0);
-        if (preisDiff !== 0) return preisDiff;
-        return String(a.name || "").localeCompare(String(b.name || ""), "de");
-      });
-      rundenMitPreisen.push({ ...r, preise: sortedPreise });
-    }
+    if (roundTitleDiff !== 0) return roundTitleDiff;
+    const catDiff = String(a.kategorie_name || "").localeCompare(
+      String(b.kategorie_name || ""),
+      "de",
+    );
+    if (catDiff !== 0) return catDiff;
+    const preisDiff = (a.preis || 0) - (b.preis || 0);
+    if (preisDiff !== 0) return preisDiff;
+    return String(a.name || "").localeCompare(String(b.name || ""), "de");
+  });
+  const rundenMitPreisen = [{ ...runde, preise: sortedPreise }];
 
     const konfigName = await resolveKonfigNameForPreisblatt(
       runde,
