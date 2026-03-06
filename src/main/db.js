@@ -1162,7 +1162,7 @@ export async function getRundenPreise(rundeId) {
   const database = await getDatabase();
   return await database.all(
     `
-    SELECT rp.*, rp.anzahl as rp_anzahl, p.name, p.herkunft, p.preis, p.gesamtpreis, p.id as preis_id, k.name as kategorie_name
+    SELECT rp.*, rp.anzahl as rp_anzahl, p.name, p.herkunft, p.preis, p.gesamtpreis, p.id as preis_id, p.is_a_spende, k.name as kategorie_name
     FROM runden_preise rp
     JOIN preise p ON rp.preis_id = p.id
     JOIN kategorien k ON rp.kategorie_id = k.id

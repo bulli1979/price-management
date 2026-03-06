@@ -75,7 +75,12 @@
       app.showRundeDetailsModal = false;
     } catch (error) {
       console.error("Fehler beim Speichern der Rundenwerte/Ranges:", error);
-      alert("Speichern fehlgeschlagen: " + (error && error.message ? error.message : String(error)));
+      const msg = "Speichern fehlgeschlagen: " + (error && error.message ? error.message : String(error));
+      if (typeof app.showStatusMessage === "function") {
+        app.showStatusMessage(msg, "error", 5200);
+      } else {
+        alert(msg);
+      }
     }
   }
 

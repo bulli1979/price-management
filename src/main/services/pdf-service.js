@@ -74,7 +74,12 @@ export function createPdfService({ app, dialog, shell, getMainWindow }) {
     }
 
     const byName = new Map(
-      konfigurationen.map((cfg) => [String(cfg.name || "").trim().toLowerCase(), cfg.name])
+      konfigurationen.map((cfg) => [
+        String(cfg.name || "")
+          .trim()
+          .toLowerCase(),
+        cfg.name,
+      ]),
     );
     const rundenTitel = String(runde?.titel || "").trim();
     if (rundenTitel && byName.has(rundenTitel.toLowerCase())) {
@@ -100,7 +105,9 @@ export function createPdfService({ app, dialog, shell, getMainWindow }) {
     for (const cfg of konfigurationen) {
       const cfgRunden = await getKonfigurationRunden(cfg.id);
       const cfgTitles = new Set(
-        (cfgRunden || []).map((row) => String(row.titel || "").trim()).filter(Boolean)
+        (cfgRunden || [])
+          .map((row) => String(row.titel || "").trim())
+          .filter(Boolean),
       );
       if (cfgTitles.size === 0) continue;
 
@@ -111,7 +118,7 @@ export function createPdfService({ app, dialog, shell, getMainWindow }) {
       const isComplete = score === usedTitles.length;
 
       if (
-        isComplete && !bestIsComplete ||
+        (isComplete && !bestIsComplete) ||
         (isComplete === bestIsComplete && score > bestScore)
       ) {
         bestMatch = cfg.name;
@@ -219,7 +226,10 @@ export function createPdfService({ app, dialog, shell, getMainWindow }) {
       rundenMitPreisen.push({ ...r, preise: sortedPreise });
     }
 
-    const konfigName = await resolveKonfigNameForPreisblatt(runde, rundenMitPreisen);
+    const konfigName = await resolveKonfigNameForPreisblatt(
+      runde,
+      rundenMitPreisen,
+    );
     const html = generatePreisblattHTML(runde, rundenMitPreisen, konfigName);
     const pdfPath = path.join(pdfDir, `preisblatt_tag_${runde.datum}.pdf`);
     await renderPdf({ html, pdfPath });
@@ -393,7 +403,10 @@ function generatePreisblattHTML(runde, rundenMitPreisen, konfigName = null) {
       }
       const group = roundGroups.get(roundTitle);
       if (Number.isFinite(parseInt(p.runden_sort_order))) {
-        group.sortOrder = Math.min(group.sortOrder, parseInt(p.runden_sort_order));
+        group.sortOrder = Math.min(
+          group.sortOrder,
+          parseInt(p.runden_sort_order),
+        );
       }
       group.items.push(p);
     }
@@ -415,7 +428,7 @@ function generatePreisblattHTML(runde, rundenMitPreisen, konfigName = null) {
 
     tableRows += `<tr class="round-title-row"><td>${roundTitle}</td></tr>`;
     for (const item of sortedItems) {
-      const preisName = `${item.name}${(item.rp_anzahl || 1) > 1 ? ` (x${item.rp_anzahl})` : ""}`;
+      const preisName = `${item.rp_anzahl || 1} x ${item.name}`;
       tableRows += `<tr><td>${preisName}</td></tr>`;
     }
   }
@@ -430,7 +443,7 @@ function generatePreisblattHTML(runde, rundenMitPreisen, konfigName = null) {
         body { font-family: Arial, sans-serif; margin: 30px; color: #333; }
         h1 { color: #2563eb; text-align: center; margin-bottom: 5px; font-size: 22px; }
         .subtitle { text-align: center; color: #666; margin-bottom: 25px; font-size: 14px; }
-        .spielrunde-label { font-size: 14px; font-weight: 600; color: #1f2937; margin-bottom: 8px; }
+        .gang-label { font-size: 14px; font-weight: 600; color: #1f2937; margin-bottom: 8px; }
         table { width: 100%; border-collapse: collapse; }
         th { background-color: #2563eb; color: white; padding: 10px 12px; text-align: left; font-size: 13px; }
         .header-cell { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -442,7 +455,7 @@ function generatePreisblattHTML(runde, rundenMitPreisen, konfigName = null) {
       </style>
     </head>
     <body>
-      <div class="spielrunde-label">Spielrunde ${runde.rundennummer}</div>
+      <div class="gang-label">Gang ${runde.rundennummer}</div>
       <table>
         <thead>
           <tr>
@@ -477,6 +490,7 @@ function generateUebersichtHTML(runde, preise) {
       <tr>
         <td class="nr">${nr++}</td>
         <td>${p.name}${(p.rp_anzahl || 1) > 1 ? ' <span style="color:#6b7280">(×' + p.rp_anzahl + ")</span>" : ""}</td>
+        <td style="text-align: center">${p.is_a_spende ? "Ja" : ""}</td>
         <td class="price">${formatCurrency(p.preis * (p.rp_anzahl || 1))}</td>
       </tr>`;
   }
@@ -516,6 +530,7 @@ function generateUebersichtHTML(runde, preise) {
           <tr>
             <th>#</th>
             <th>Preis</th>
+            <th style="text-align: center">Spende</th>
             <th style="text-align: right">Wert (CHF)</th>
           </tr>
         </thead>

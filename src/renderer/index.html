@@ -57,71 +57,64 @@
       <!-- ============================================== -->
       <div x-show="rundeEditorMode" class="fixed inset-0 bg-gray-100 z-40 flex flex-col">
         <!-- Editor Header -->
-        <div class="bg-white shadow-md px-6 py-3 flex-shrink-0">
-          <div class="flex justify-between items-center">
-            <div class="flex items-center space-x-4">
+        <div class="bg-white shadow-md px-4 py-2 flex-shrink-0">
+          <div class="flex justify-between items-center gap-3">
+            <div class="flex items-center gap-3 min-w-0">
               <button
                 @click="backFromRundeEditor()"
-                class="text-blue-600 hover:text-blue-800 font-medium"
+                class="text-blue-600 hover:text-blue-800 font-medium text-sm"
               >
                 ← Zurück
               </button>
-              <div>
-                <h1 class="text-xl font-bold text-gray-800">
-                  Spielrunde <span x-text="aktuelleRunde ? aktuelleRunde.rundennummer : ''"></span>
-                  <span x-show="getAktuelleRundeTitelLabel()" class="text-base font-medium text-gray-600 ml-2" x-text="getAktuelleRundeTitelLabel()"></span>
-                </h1>
-                <p class="text-sm text-gray-500">
-                  <span x-text="aktuellesLotto ? aktuellesLotto.name : ''"></span> — 
-                  Tag <span x-text="getAktuelleRundeDatumLabel()"></span>
-                </p>
+              <div class="min-w-0">
+                <h1 class="text-lg font-bold text-gray-800 truncate" x-text="getAktuelleRundeHeaderTitle()"></h1>
               </div>
             </div>
             <template x-if="aktuelleRunde">
-            <div class="flex items-center space-x-3">
-              <div class="flex items-center space-x-2 text-sm">
+            <div class="flex items-center gap-2">
+              <div class="flex items-center space-x-1 text-xs">
                 <span class="text-gray-500">Einnahmen:</span>
                 <span class="font-semibold text-gray-700" x-text="formatCurrency(getAktuelleRundeEinnahmenDisplay())"></span>
               </div>
-              <div class="flex items-center space-x-2 text-sm">
+              <div class="flex items-center space-x-1 text-xs">
                 <span class="text-gray-500">Ausgaben:</span>
                 <span class="font-semibold text-gray-700" x-text="formatCurrency(parseOptionalNumber(aktuelleRunde ? aktuelleRunde.ausgaben : 0))"></span>
               </div>
-              <div class="flex items-center space-x-2 text-sm">
+              <div class="flex items-center space-x-1 text-xs">
                 <span class="text-gray-500 font-semibold text-blue-700">Eingesetzter Betrag:</span>
                 <span class="font-semibold text-blue-700" x-text="formatCurrency(parseOptionalNumber(aktuelleRunde ? aktuelleRunde.price_amount : 0))"></span>
               </div>
               <button
                 @click="openRundeDetailsModal()"
-                class="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+                class="px-2.5 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs"
                 title="Rundenwerte bearbeiten"
               >
                 ✏️ Werte bearbeiten
               </button>
               <button
                 @click="openRegenerateConfirmModal()"
-                class="px-3 py-1.5 bg-yellow-500 text-white rounded hover:bg-yellow-600 text-sm"
+                class="px-2.5 py-1 bg-yellow-500 text-white rounded hover:bg-yellow-600 text-xs"
                 title="Preise neu generieren (basierend auf Eingesetzter Betrag)"
               >
                 🔄 Neu generieren
               </button>
               <button
                 @click="exportPreisblatt(aktuelleRunde.id)"
-                class="px-3 py-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 text-sm"
+                class="px-2.5 py-1 bg-emerald-600 text-white rounded hover:bg-emerald-700 text-xs"
                 title="Preisblatt: Preise nach Kategorie, billig→teuer"
               >
                 🏷️ Preisblatt
               </button>
               <button
                 @click="exportUebersicht(aktuelleRunde.id)"
-                class="px-3 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm"
+                class="px-2.5 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-xs"
                 title="Übersicht: Alle Preise + Gesamtpreis + Geldeinsatz"
               >
                 📊 Übersicht
               </button>
               <button
                 @click="openPdfFolder()"
-                class="px-3 py-1.5 bg-gray-500 text-white rounded hover:bg-gray-600 text-sm"
+                class="px-2.5 py-1 bg-gray-500 text-white rounded hover:bg-gray-600 text-xs"
                 title="PDF-Ordner öffnen"
               >
                 📂 Ordner
@@ -148,11 +141,17 @@
                   Gewählte Preise
                   <span class="text-sm font-normal text-gray-500" x-text="'(' + rundePreise.length + ')'"></span>
                 </h2>
+                <button
+                  type="button"
+                  @click="showRundeInfoPanel = !showRundeInfoPanel"
+                  class="text-xs px-2 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-100"
+                  x-text="showRundeInfoPanel ? 'Infos ausblenden' : 'Infos anzeigen'"
+                ></button>
               </div>
               <p class="text-xs text-gray-400 mt-1">Preise hierher ziehen oder rechts klicken zum Hinzufügen</p>
               
               <!-- Kategorien mit bearbeitbarer Anzahl -->
-              <div x-show="hasAktuelleRundeKategorien()" class="mt-2 space-y-1">
+              <div x-show="showRundeInfoPanel && hasAktuelleRundeKategorien()" class="mt-2 space-y-1">
                 <div class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Kategorien / Anzahl</div>
                 <template x-for="[titel, kategorien] in getAktuelleRundeKategorienByTitelEntries()" :key="titel">
                   <div class="space-y-1">
@@ -169,8 +168,8 @@
                   </div>
                 </template>
               </div>
-              <div x-show="getAktuelleTagRundenTitelList().length > 0" class="mt-2 space-y-1">
-                <div class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Spielrunden im Tag</div>
+              <div x-show="showRundeInfoPanel && getAktuelleTagRundenTitelList().length > 0" class="mt-2 space-y-1">
+                <div class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Gänge im Tag</div>
                 <template x-for="rt in getAktuelleTagRundenTitelList()" :key="rt.id">
                   <div class="text-xs text-gray-600" :class="aktuelleRunde && rt.id === aktuelleRunde.id ? 'font-semibold text-blue-700' : ''" x-text="rt.label"></div>
                 </template>
@@ -880,7 +879,7 @@
             <div x-show="aktuellerLottoTag !== null" class="bg-white rounded-lg shadow-md p-6">
               <div class="flex justify-between items-center mb-4">
                 <h2 class="text-xl font-semibold text-gray-800">
-                  Spielrunden - Tag <span x-text="aktuellerLottoTag"></span>
+                  Gänge - Tag <span x-text="aktuellerLottoTag"></span>
                 </h2>
                 <div class="flex items-center space-x-4">
                   <div class="flex items-center space-x-2">
@@ -916,7 +915,7 @@
                     <div class="flex justify-between items-center">
                 <div>
                         <h4 class="font-semibold text-gray-800">
-                          Spielrunde <span x-text="runde.rundennummer"></span>
+                          Gang <span x-text="runde.rundennummer"></span>
                         </h4>
                         <p class="text-sm text-gray-600 mt-1">
                           Einnahmen: <span x-text="formatCurrency(runde.einnahmen || 0)"></span> |

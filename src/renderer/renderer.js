@@ -45,6 +45,7 @@ function preisRundenApp() {
     preisHistorie: [],
     preisFilter: "",
     kategorieFilter: "",
+    showRundeInfoPanel: false,
     selectedRundenTitelForManualAdd: "__AUTO__",
     draggedPreis: null,
     dragOverLeft: false,
@@ -92,6 +93,7 @@ function preisRundenApp() {
       try {
         console.log("App initialisiert");
         console.log("ElectronAPI verfügbar:", !!window.electronAPI);
+        this.enableNonBlockingAlerts();
 
         if (!window.electronAPI) {
           console.error("KRITISCHER FEHLER: ElectronAPI ist nicht verfügbar!");
@@ -105,6 +107,26 @@ function preisRundenApp() {
       } catch (error) {
         console.error("Fehler beim Initialisieren der App:", error);
       }
+    },
+
+    enableNonBlockingAlerts() {
+      if (window.__pmAlertWrapped) return;
+      const app = this;
+      const nativeAlert =
+        typeof window.alert === "function" ? window.alert.bind(window) : null;
+      window.__pmNativeAlert = nativeAlert;
+
+      window.alert = (message) => {
+        const text = String(message ?? "").trim();
+        if (!text) return;
+        const compact = text.replace(/\s*\n\s*/g, " | ");
+        let type = "info";
+        if (/fehler|fehlgeschlagen|kritisch|❌/i.test(compact)) type = "error";
+        else if (/achtung|maximal|warn/i.test(compact)) type = "warning";
+        app.showStatusMessage(compact, type, type === "error" ? 5200 : 3600);
+      };
+
+      window.__pmAlertWrapped = true;
     },
 
     wrapElectronAPIWithLoader() {
@@ -660,6 +682,59 @@ function preisRundenApp() {
       return `- ${this.aktuelleRunde.titel}`;
     },
 
+    normalizeTitelValue(value) {
+      return String(value || "").trim().toLowerCase();
+    },
+
+    resolveKonfigNameFromRundeTitel(rawTitel) {
+      const titel = String(rawTitel || "").trim();
+      if (!titel) return "";
+
+      const exactConfig = this.konfigurationen.find(
+        (cfg) => this.normalizeTitelValue(cfg.name) === this.normalizeTitelValue(titel)
+      );
+      if (exactConfig) return exactConfig.name;
+
+      const teile = titel
+        .split("/")
+        .map((t) => String(t || "").trim())
+        .filter(Boolean);
+      if (teile.length === 0) return titel;
+
+      let bestConfigName = "";
+      let bestScore = 0;
+
+      for (const cfg of this.konfigurationen) {
+        const cfgRundenTitles = new Set(
+          (cfg._runden || [])
+            .map((r) => this.normalizeTitelValue(r.titel))
+            .filter(Boolean)
+        );
+        if (cfgRundenTitles.size === 0) continue;
+
+        let score = 0;
+        for (const teil of teile) {
+          if (cfgRundenTitles.has(this.normalizeTitelValue(teil))) {
+            score += 1;
+          }
+        }
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestConfigName = cfg.name;
+        }
+      }
+
+      return bestScore > 0 ? bestConfigName : titel;
+    },
+
+    getAktuelleRundeHeaderTitle() {
+      if (!this.aktuelleRunde) return "";
+      const nummer = this.aktuelleRunde.rundennummer ?? "";
+      const konfigName = this.resolveKonfigNameFromRundeTitel(this.aktuelleRunde.titel);
+      return konfigName ? `Gang ${nummer}: ${konfigName}` : `Gang ${nummer}`;
+    },
+
     getAktuelleRundeKategorienList() {
       if (!this.aktuelleRunde || !Array.isArray(this.aktuelleRunde.kategorien)) return [];
       return this.aktuelleRunde.kategorien;
@@ -714,7 +789,7 @@ function preisRundenApp() {
     getAktuelleTagRundenTitelList() {
       return this.getAktuellerTagRundenList().map((r) => ({
         id: r.id,
-        label: `Spielrunde ${r.rundennummer}${r.titel ? `: ${r.titel}` : ""}`,
+        label: `Gang ${r.rundennummer}${r.titel ? `: ${r.titel}` : ""}`,
       }));
     },
 
@@ -1995,6 +2070,7 @@ function preisRundenApp() {
           // Bei maximaler Verfügbarkeit nur still aktualisieren, ohne blockierende Meldung.
         }
         await this.loadRundeEditorData();
+        await this.syncAusgabenFromRundePreise();
       } catch (error) {
         console.error("Fehler beim Hinzufügen:", error);
         this.showStatusMessage("Fehler beim Hinzufügen: " + error.message, "error", 3600);
@@ -2020,6 +2096,7 @@ function preisRundenApp() {
           // Bei Limit still auf den maximal möglichen Wert begrenzen.
         }
         await this.loadRundeEditorData();
+        await this.syncAusgabenFromRundePreise();
       } catch (error) {
         console.error("Fehler beim Aktualisieren der Anzahl:", error);
         this.showStatusMessage("Fehler beim Aktualisieren der Anzahl.", "error", 3200);
@@ -2064,6 +2141,7 @@ function preisRundenApp() {
       try {
         await window.electronAPI.removePreisVonRundeById(rundenPreisId);
         await this.loadRundeEditorData();
+        await this.syncAusgabenFromRundePreise();
       } catch (error) {
         console.error("Fehler beim Entfernen:", error);
         alert("Fehler: " + error.message);
@@ -2098,6 +2176,7 @@ function preisRundenApp() {
         
         if (result.success) {
           await this.loadRundeEditorData();
+          await this.syncAusgabenFromRundePreise();
         } else {
           alert("Fehler bei der Generierung: " + result.error);
         }
