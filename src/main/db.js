@@ -559,6 +559,8 @@ export async function updatePreis(id, name, herkunft, anzahl, preis, isASpend = 
 
 export async function deletePreis(id) {
   const database = await getDatabase();
+  await database.run("DELETE FROM konfigurationen_runden_preise WHERE preis_id = ?", [id]);
+  await database.run("DELETE FROM runden_preise WHERE preis_id = ?", [id]);
   await database.run("DELETE FROM preise WHERE id = ?", [id]);
 }
 

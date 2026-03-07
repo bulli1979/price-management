@@ -154,16 +154,18 @@ function preisRundenApp() {
     async loadData() {
       try {
         console.log("Lade Daten...");
-        this.preise = await window.electronAPI.getAllPreise();
-        console.log("Preise geladen:", this.preise.length);
-        this.kategorien = await window.electronAPI.getAllKategorien();
-        console.log("Kategorien geladen:", this.kategorien.length);
-        this.lottos = await window.electronAPI.getAllLottos();
-        console.log("Lottos geladen:", this.lottos.length);
+        const [preise, kategorien, lottos, runden] = await Promise.all([
+          window.electronAPI.getAllPreise(),
+          window.electronAPI.getAllKategorien(),
+          window.electronAPI.getAllLottos(),
+          window.electronAPI.getAllRunden(),
+        ]);
+        this.preise = preise;
+        this.kategorien = kategorien;
+        this.lottos = lottos;
+        this.runden = runden;
         await this.loadKonfigurationenMitKategorien();
-        console.log("Konfigurationen geladen:", this.konfigurationen.length);
-        this.runden = await window.electronAPI.getAllRunden();
-        console.log("Runden geladen:", this.runden.length);
+        console.log("Daten geladen:", preise.length, "Preise,", kategorien.length, "Kategorien,", lottos.length, "Lottos,", runden.length, "Runden");
       } catch (error) {
         console.error("Fehler beim Laden der Daten:", error);
       }
@@ -215,6 +217,7 @@ function preisRundenApp() {
         try {
           await window.electronAPI.deletePreis(id);
           await this.loadData();
+          await this.loadPreisHistorie();
         } catch (error) {
           console.error("Fehler beim Löschen des Preises:", error);
         }
@@ -580,6 +583,7 @@ function preisRundenApp() {
         } else {
           this.aktuellerLottoTag = null;
         }
+        await this.loadPreisHistorie();
         await this.loadData();
       } catch (error) {
         console.error("Fehler beim Löschen des Tages:", error);
@@ -1112,6 +1116,7 @@ function preisRundenApp() {
       for (const h of this.preisHistorie) {
         if (!groups[h.preis_id]) {
           groups[h.preis_id] = {
+            preis_id: h.preis_id,
             name: h.name,
             herkunft: h.herkunft,
             preis: h.preis,
@@ -1213,11 +1218,12 @@ function preisRundenApp() {
     // Konfigurationen functions
     async loadKonfigurationenMitKategorien() {
       try {
-        this.konfigurationen = await window.electronAPI.getAllKonfigurationen();
-        for (const config of this.konfigurationen) {
+        const configs = await window.electronAPI.getAllKonfigurationen();
+        for (const config of configs) {
           config._kategorien = await window.electronAPI.getKonfigurationKategorien(config.id);
           config._runden = await window.electronAPI.getKonfigurationRunden(config.id);
         }
+        this.konfigurationen = configs;
       } catch (error) {
         console.error("Fehler beim Laden der Konfigurationen:", error);
       }
@@ -1792,6 +1798,7 @@ function preisRundenApp() {
         this.showNeueRundeModal = false;
         this.resetRundeForm();
         await this.loadLottoDays(this.aktuellesLotto.id);
+        await this.loadPreisHistorie();
         
         // Öffne den Editor für die erste erstellte Runde
         if (erstellteRunden.length > 0 && erstellteRunden[0]) {
