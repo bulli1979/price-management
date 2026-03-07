@@ -4,6 +4,7 @@ import puppeteer from "puppeteer";
 import {
   getRundeById,
   getRundenPreise,
+  getRundenByLottoDay,
   getLottoById,
   getLottoDays,
   getAllKonfigurationen,
@@ -196,34 +197,38 @@ export function createPdfService({ app, dialog, shell, getMainWindow }) {
       return { success: false, message: "Export abgebrochen" };
     }
 
-  const preise = await getRundenPreise(runde.id);
-  const sortedPreise = [...preise].sort((a, b) => {
-    const roundSortDiff =
-      (parseInt(a.runden_sort_order) || 0) -
-      (parseInt(b.runden_sort_order) || 0);
-    if (roundSortDiff !== 0) return roundSortDiff;
-    const roundTitleDiff = String(a.runden_titel || "").localeCompare(
-      String(b.runden_titel || ""),
-      "de",
-    );
-    if (roundTitleDiff !== 0) return roundTitleDiff;
-    const catDiff = String(a.kategorie_name || "").localeCompare(
-      String(b.kategorie_name || ""),
-      "de",
-    );
-    if (catDiff !== 0) return catDiff;
-    const preisDiff = (a.preis || 0) - (b.preis || 0);
-    if (preisDiff !== 0) return preisDiff;
-    return String(a.name || "").localeCompare(String(b.name || ""), "de");
-  });
-  const rundenMitPreisen = [{ ...runde, preise: sortedPreise }];
+    const preise = await getRundenPreise(runde.id);
+    const sortedPreise = [...preise].sort((a, b) => {
+      const roundSortDiff =
+        (parseInt(a.runden_sort_order) || 0) -
+        (parseInt(b.runden_sort_order) || 0);
+      if (roundSortDiff !== 0) return roundSortDiff;
+      const roundTitleDiff = String(a.runden_titel || "").localeCompare(
+        String(b.runden_titel || ""),
+        "de",
+      );
+      if (roundTitleDiff !== 0) return roundTitleDiff;
+      const catDiff = String(a.kategorie_name || "").localeCompare(
+        String(b.kategorie_name || ""),
+        "de",
+      );
+      if (catDiff !== 0) return catDiff;
+      const preisDiff = (a.preis || 0) - (b.preis || 0);
+      if (preisDiff !== 0) return preisDiff;
+      return String(a.name || "").localeCompare(String(b.name || ""), "de");
+    });
+    const rundenMitPreisen = [{ ...runde, preise: sortedPreise }];
 
     const konfigName = await resolveKonfigNameForPreisblatt(
       runde,
       rundenMitPreisen,
     );
     const html = generatePreisblattHTML(runde, rundenMitPreisen, konfigName);
-    const pdfPath = path.join(pdfDir, `preisblatt_tag_${runde.datum}.pdf`);
+    const datumFormatted = formatDateDDMMYYYY(runde.datum);
+    const pdfPath = path.join(
+      pdfDir,
+      `${datumFormatted}-Gang-${runde.rundennummer}-Preisblatt.pdf`,
+    );
     await renderPdf({ html, pdfPath });
     return { success: true, path: pdfPath };
   }
@@ -430,7 +435,7 @@ function generatePreisblattHTML(runde, rundenMitPreisen, konfigName = null) {
     <html>
     <head>
       <meta charset="UTF-8">
-      <title>Preisblatt Tag ${runde.datum}</title>
+      <title>${formatDateDDMMYYYY(runde.datum)}-Gang-${runde.rundennummer}-Preisblatt</title>
       <style>
         body { font-family: Arial, sans-serif; margin: 30px; color: #333; }
         h1 { color: #2563eb; text-align: center; margin-bottom: 5px; font-size: 22px; }
@@ -447,7 +452,7 @@ function generatePreisblattHTML(runde, rundenMitPreisen, konfigName = null) {
       </style>
     </head>
     <body>
-      <div class="gang-label">Gang ${runde.rundennummer}</div>
+      <div class="gang-label">Gang ${runde.rundennummer} — ${formatDateDDMMYYYY(runde.datum)}</div>
       <table>
         <thead>
           <tr>
@@ -711,4 +716,12 @@ function formatCurrency(amount) {
     style: "currency",
     currency: "CHF",
   }).format(amount);
+}
+
+function formatDateDDMMYYYY(dateStr) {
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return dateStr || "";
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${dd}-${mm}-${d.getFullYear()}`;
 }
