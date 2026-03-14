@@ -249,7 +249,10 @@ export function createPdfService({ app, dialog, shell, getMainWindow }) {
     }
 
     const sorted = [...rundenPreise].sort((a, b) => a.preis - b.preis);
-    const html = generateUebersichtHTML(runde, sorted);
+    const konfigName = await resolveKonfigNameForPreisblatt(runde, [
+      { ...runde, preise: sorted },
+    ]);
+    const html = generateUebersichtHTML(runde, sorted, konfigName);
     const pdfPath = path.join(
       pdfDir,
       `uebersicht_runde_${runde.rundennummer}.pdf`,
@@ -268,16 +271,27 @@ export function createPdfService({ app, dialog, shell, getMainWindow }) {
       const runden = await getRundenByLottoDay(day.id);
       for (const r of runden) {
         const preise = await getRundenPreise(r.id);
-        const preissumme = preise.reduce(
+        const sortedPreise = [...preise].sort((a, b) => (a.preis || 0) - (b.preis || 0));
+        const preissumme = sortedPreise.reduce(
           (sum, p) => sum + p.preis * (p.rp_anzahl || 1),
           0,
         );
+        const spendenPreissumme = sortedPreise.reduce(
+          (sum, p) => sum + (p.is_a_spende ? (p.preis || 0) * (p.rp_anzahl || 1) : 0),
+          0,
+        );
+        const konfigName = await resolveKonfigNameForPreisblatt(r, [
+          { ...r, preise: sortedPreise },
+        ]);
         allRunden.push({
           ...r,
           day_date: day.date,
           day_number: day.day_number,
+          preise: sortedPreise,
+          konfigName,
           preissumme,
-          preisCount: preise.length,
+          spendenPreissumme,
+          preisCount: sortedPreise.reduce((sum, p) => sum + (p.rp_anzahl || 1), 0),
         });
       }
     }
@@ -473,22 +487,45 @@ function generatePreisblattHTML(runde, rundenMitPreisen, konfigName = null) {
   `;
 }
 
-function generateUebersichtHTML(runde, preise) {
+function generateUebersichtHTML(runde, preise, konfigName = null) {
+  const konfigurationTitel =
+    (konfigName && String(konfigName).trim()) ||
+    String(runde?.titel || "").trim() ||
+    "Configurationstitel";
   const preissumme = preise.reduce(
     (sum, p) => sum + p.preis * (p.rp_anzahl || 1),
     0,
   );
+  const totalAnzahlPreise = preise.reduce((sum, p) => sum + (p.rp_anzahl || 1), 0);
+  const totalAnzahlSpenden = preise.reduce(
+    (sum, p) => sum + (p.is_a_spende ? (p.rp_anzahl || 1) : 0),
+    0,
+  );
+  const totalWertSpenden = preise.reduce(
+    (sum, p) => sum + (p.is_a_spende ? (p.preis || 0) * (p.rp_anzahl || 1) : 0),
+    0,
+  );
+  const einnahmen = Number(runde.einnahmen) || 0;
+  const anzahlKarten = einnahmen > 0 ? einnahmen / 2 : 0;
   const geldeinsatz = runde.price_amount || runde.ausgaben || 0;
+  const kostenText = einnahmen > 0 ? formatCurrency(geldeinsatz) : "Gratis Gang";
 
   let rows = "";
   let nr = 1;
   for (const p of preise) {
+    const anzahl = p.rp_anzahl || 1;
+    const preisProStk = p.preis || 0;
+    const preisGesamt = preisProStk * anzahl;
+    const rundenKonfiguration = `Runde ${runde.rundennummer} - ${konfigurationTitel}`;
     rows += `
       <tr>
         <td class="nr">${nr++}</td>
-        <td>${p.name}${(p.rp_anzahl || 1) > 1 ? ' <span style="color:#6b7280">(×' + p.rp_anzahl + ")</span>" : ""}</td>
-        <td style="text-align: center">${p.is_a_spende ? "Ja" : ""}</td>
-        <td class="price">${formatCurrency(p.preis * (p.rp_anzahl || 1))}</td>
+        <td>${rundenKonfiguration}</td>
+        <td>${p.name}</td>
+        <td class="price">${formatCurrency(preisProStk)}</td>
+        <td style="text-align: center">${anzahl}</td>
+        <td class="price">${formatCurrency(preisGesamt)}</td>
+        <td style="text-align: center">${p.is_a_spende ? "Ja" : "Nein"}</td>
       </tr>`;
   }
 
@@ -508,7 +545,6 @@ function generateUebersichtHTML(runde, preise) {
         tr:nth-child(even) { background-color: #f9fafb; }
         .nr { width: 40px; color: #9ca3af; text-align: center; }
         .price { text-align: right; font-weight: 600; }
-        th:last-child { text-align: right; }
         th:first-child { text-align: center; width: 40px; }
         .summary { margin-top: 10px; border-top: 3px solid #2563eb; padding-top: 15px; }
         .summary-row { display: flex; justify-content: space-between; padding: 8px 0; font-size: 16px; }
@@ -520,15 +556,18 @@ function generateUebersichtHTML(runde, preise) {
       </style>
     </head>
     <body>
-      <h1>Übersicht — Runde ${runde.rundennummer}</h1>
-      <div class="subtitle">Datum: ${runde.datum} | ${preise.length} Preise</div>
+      <h1>Übersicht — Runde ${runde.rundennummer} - ${konfigurationTitel}</h1>
+      <div class="subtitle">Datum: ${runde.datum} | ${totalAnzahlPreise} eingesetzte Preise</div>
       <table>
         <thead>
           <tr>
             <th>#</th>
+            <th>Runde ${runde.rundennummer} - Konfiguration</th>
             <th>Preis</th>
+            <th style="text-align: right">Preis pro Stk</th>
+            <th style="text-align: center">Anzahl</th>
+            <th style="text-align: right">Preis gesamt</th>
             <th style="text-align: center">Spende</th>
-            <th style="text-align: right">Wert (CHF)</th>
           </tr>
         </thead>
         <tbody>
@@ -542,12 +581,24 @@ function generateUebersichtHTML(runde, preise) {
           <span>${formatCurrency(preissumme)}</span>
         </div>
         <div class="summary-row einsatz">
+          <span class="label">Gesamt eingesetzte Preise pro Runde</span>
+          <span>${totalAnzahlPreise}</span>
+        </div>
+        <div class="summary-row einsatz">
+          <span class="label">davon Spenden</span>
+          <span>${totalAnzahlSpenden} (${formatCurrency(totalWertSpenden)})</span>
+        </div>
+        <div class="summary-row einsatz">
           <span class="label">Einnahmen</span>
-          <span>${formatCurrency(runde.einnahmen || 0)}</span>
+          <span>${formatCurrency(einnahmen)}</span>
         </div>
         <div class="summary-row einsatz" style="color:#059669">
-          <span class="label" style="color:#059669">Geldeinsatz</span>
-          <span>${formatCurrency(geldeinsatz)}</span>
+          <span class="label" style="color:#059669">Anzahl Karten</span>
+          <span>${Number.isInteger(anzahlKarten) ? anzahlKarten : anzahlKarten.toFixed(2)}</span>
+        </div>
+        <div class="summary-row einsatz" style="color:#059669">
+          <span class="label" style="color:#059669">Kosten</span>
+          <span>${kostenText}</span>
         </div>
       </div>
     </body>
@@ -556,6 +607,17 @@ function generateUebersichtHTML(runde, preise) {
 }
 
 function generateLottoHTML(lotto, days, allRunden) {
+  const formatAnzahlKarten = (wert) => {
+    const numeric = Number(wert) || 0;
+    if (numeric === 0) return "Gratis Runde";
+    return Number.isInteger(numeric) ? String(numeric) : numeric.toFixed(2);
+  };
+
+  const sortedRunden = [...allRunden].sort((a, b) => {
+    const dayDiff = (a.day_number || 0) - (b.day_number || 0);
+    if (dayDiff !== 0) return dayDiff;
+    return (a.rundennummer || 0) - (b.rundennummer || 0);
+  });
   const totalEinnahmen = allRunden.reduce((s, r) => s + (r.einnahmen || 0), 0);
   const totalAusgaben = allRunden.reduce((s, r) => s + (r.ausgaben || 0), 0);
   const totalPreissumme = allRunden.reduce(
@@ -566,11 +628,64 @@ function generateLottoHTML(lotto, days, allRunden) {
     (s, r) => s + (r.price_amount || 0),
     0,
   );
-  const totalGastro = days.reduce((s, d) => s + (d.gastro_revenue || 0), 0);
-  const totalSpenden = days.reduce((s, d) => s + (d.donations || 0), 0);
+  const totalIndividuelleSpenden = days.reduce((s, d) => s + (d.donations || 0), 0);
+  const totalSpendenPreise = allRunden.reduce((s, r) => s + (r.spendenPreissumme || 0), 0);
+  const totalSpenden = totalIndividuelleSpenden + totalSpendenPreise;
+  const identifikationsnummer =
+    lotto.identifikationsnummer || lotto.identification_number || lotto.id || "—";
+
+  let roundPages = "";
+  for (const r of sortedRunden) {
+    const roundEinnahmen = Number(r.einnahmen) || 0;
+    const roundAnzahlKarten = roundEinnahmen / 2;
+    const roundRows = (r.preise || [])
+      .map((p, idx) => {
+        const anzahl = p.rp_anzahl || 1;
+        const preisProStk = p.preis || 0;
+        const preisGesamt = preisProStk * anzahl;
+        return `
+          <tr>
+            <td style="text-align:center">${idx + 1}</td>
+            <td>${p.name || "—"}</td>
+            <td style="text-align:right">${formatCurrency(preisProStk)}</td>
+            <td style="text-align:center">${anzahl}</td>
+            <td style="text-align:right">${formatCurrency(preisGesamt)}</td>
+            <td style="text-align:center">${p.is_a_spende ? "Ja" : "Nein"}</td>
+          </tr>
+        `;
+      })
+      .join("");
+
+    roundPages += `
+      <section class="single-round-page">
+        <h2>Übersicht — Runde ${r.rundennummer} - ${r.konfigName || r.titel || "Configurationstitel"}</h2>
+        <div class="subtitle">Tag ${r.day_number} | Datum: ${r.day_date}</div>
+        <table>
+          <thead>
+            <tr>
+              <th style="text-align:center; width:40px;">#</th>
+              <th>Preis</th>
+              <th style="text-align:right">Preis pro Stk</th>
+              <th style="text-align:center">Anzahl</th>
+              <th style="text-align:right">Preis gesamt</th>
+              <th style="text-align:center">Spende</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${roundRows}
+          </tbody>
+        </table>
+        <div class="round-totals">
+          <div><strong>Gesamtpreis:</strong> ${formatCurrency(r.preissumme || 0)}</div>
+          <div><strong>Einnahmen:</strong> ${formatCurrency(roundEinnahmen)}</div>
+          <div><strong>Anzahl Karten:</strong> ${formatAnzahlKarten(roundAnzahlKarten)}</div>
+        </div>
+      </section>
+    `;
+  }
 
   const rundenByDay = {};
-  for (const r of allRunden) {
+  for (const r of sortedRunden) {
     const key = r.day_number;
     if (!rundenByDay[key]) rundenByDay[key] = [];
     rundenByDay[key].push(r);
@@ -580,17 +695,17 @@ function generateLottoHTML(lotto, days, allRunden) {
   for (const day of days) {
     const dayRunden = rundenByDay[day.day_number] || [];
     const dayEinnahmen = dayRunden.reduce((s, r) => s + (r.einnahmen || 0), 0);
+    const dayAnzahlKarten = dayEinnahmen / 2;
     const dayAusgaben = dayRunden.reduce((s, r) => s + (r.ausgaben || 0), 0);
     const dayPreissumme = dayRunden.reduce(
       (s, r) => s + (r.preissumme || 0),
       0,
     );
-    const dayGastro = day.gastro_revenue || 0;
     const daySpenden = day.donations || 0;
 
     bodyContent += `
       <div class="day-section">
-        <div class="day-header">Tag ${day.day_number} — ${day.date}${dayGastro || daySpenden ? ` <span style="font-weight:normal; font-size:12px; opacity:0.85">(Gastro: ${formatCurrency(dayGastro)} | Spenden: ${formatCurrency(daySpenden)})</span>` : ""}</div>
+        <div class="day-header">Tag ${day.day_number} — ${day.date}${daySpenden ? ` <span style="font-weight:normal; font-size:12px; opacity:0.85">(Spenden: ${formatCurrency(daySpenden)})</span>` : ""}</div>
         <table>
           <thead>
             <tr>
@@ -598,6 +713,7 @@ function generateLottoHTML(lotto, days, allRunden) {
               <th style="text-align:right">Einnahmen</th>
               <th style="text-align:right">Ausgaben</th>
               <th style="text-align:right">Geldeinsatz</th>
+              <th style="text-align:center">Anzahl Karten</th>
               <th style="text-align:right">Preissumme</th>
               <th style="text-align:center">Preise</th>
             </tr>
@@ -611,6 +727,7 @@ function generateLottoHTML(lotto, days, allRunden) {
                 <td style="text-align:right">${formatCurrency(r.einnahmen || 0)}</td>
                 <td style="text-align:right">${formatCurrency(r.ausgaben || 0)}</td>
                 <td style="text-align:right">${formatCurrency(r.price_amount || 0)}</td>
+                <td style="text-align:center">${formatAnzahlKarten((r.einnahmen || 0) / 2)}</td>
                 <td style="text-align:right;font-weight:600">${formatCurrency(r.preissumme || 0)}</td>
                 <td style="text-align:center">${r.preisCount}</td>
               </tr>
@@ -621,9 +738,10 @@ function generateLottoHTML(lotto, days, allRunden) {
           <tfoot>
             <tr class="day-total">
               <td><strong>Tag-Total</strong></td>
-              <td style="text-align:right"><strong>${formatCurrency(dayEinnahmen + dayGastro + daySpenden)}</strong></td>
+              <td style="text-align:right"><strong>${formatCurrency(dayEinnahmen + daySpenden)}</strong></td>
               <td style="text-align:right"><strong>${formatCurrency(dayAusgaben)}</strong></td>
               <td style="text-align:right"><strong></strong></td>
+              <td style="text-align:center"><strong>${formatAnzahlKarten(dayAnzahlKarten)}</strong></td>
               <td style="text-align:right"><strong>${formatCurrency(dayPreissumme)}</strong></td>
               <td style="text-align:center"><strong>${dayRunden.length}</strong></td>
             </tr>
@@ -639,19 +757,35 @@ function generateLottoHTML(lotto, days, allRunden) {
       <meta charset="UTF-8">
       <title>Lotto Übersicht — ${lotto.name}</title>
       <style>
-        body { font-family: Arial, sans-serif; margin: 30px; color: #333; }
-        h1 { color: #2563eb; text-align: center; margin-bottom: 5px; font-size: 24px; }
-        .subtitle { text-align: center; color: #666; margin-bottom: 10px; font-size: 14px; }
-        .meta { display: flex; justify-content: center; gap: 30px; margin-bottom: 25px; font-size: 13px; color: #555; }
+        @page { margin: 20mm 14mm 16mm 14mm; }
+        body { font-family: Arial, sans-serif; margin: 0; color: #333; line-height: 1.35; }
+        h1 { color: #2563eb; text-align: center; margin: 6px 0 8px 0; font-size: 24px; }
+        h2 { color: #1e40af; margin: 0 0 8px 0; font-size: 20px; }
+        .subtitle { text-align: center; color: #666; margin-bottom: 14px; font-size: 14px; }
+        .meta { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; margin-bottom: 30px; font-size: 13px; color: #555; }
         .meta span { background: #f3f4f6; padding: 4px 12px; border-radius: 6px; }
-        .day-section { margin-bottom: 25px; }
+        .single-round-page { page-break-after: always; margin-bottom: 0; padding-top: 4mm; }
+        .single-round-page .subtitle { text-align: left; margin-bottom: 16px; }
+        .round-totals {
+          margin-top: 12px;
+          display: flex;
+          justify-content: space-between;
+          gap: 14px;
+          font-size: 14px;
+          background: #f8fafc;
+          border: 1px solid #e5e7eb;
+          border-radius: 8px;
+          padding: 8px 12px;
+        }
+        .gesamtblatt-title { margin-top: 2mm; }
+        .day-section { margin-bottom: 28px; }
         .day-header { background: #2563eb; color: white; padding: 8px 14px; border-radius: 6px 6px 0 0; font-weight: bold; font-size: 14px; }
-        table { width: 100%; border-collapse: collapse; margin-bottom: 0; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
         th { background-color: #eff6ff; color: #1e40af; padding: 8px 12px; text-align: left; font-size: 12px; border-bottom: 2px solid #bfdbfe; }
         td { padding: 7px 12px; border-bottom: 1px solid #e5e7eb; font-size: 13px; }
         tr:nth-child(even) { background-color: #f9fafb; }
         .day-total td { background-color: #eff6ff; border-top: 2px solid #bfdbfe; }
-        .grand-total { margin-top: 20px; border-top: 3px solid #2563eb; padding-top: 15px; }
+        .grand-total { margin-top: 24px; border-top: 3px solid #2563eb; padding-top: 18px; }
         .total-row { display: flex; justify-content: space-between; padding: 8px 0; font-size: 16px; }
         .total-row.main { font-weight: bold; font-size: 20px; color: #2563eb; border-top: 1px solid #e5e7eb; padding-top: 12px; margin-top: 5px; }
         .total-row .label { color: #6b7280; }
@@ -661,12 +795,13 @@ function generateLottoHTML(lotto, days, allRunden) {
       </style>
     </head>
     <body>
-      <h1>${lotto.name}</h1>
+      ${roundPages}
+      <h1 class="gesamtblatt-title">${lotto.name}</h1>
       <div class="subtitle">${lotto.date_from} — ${lotto.date_to}</div>
       <div class="meta">
         <span>Tage: ${days.length}</span>
         <span>Runden: ${allRunden.length}</span>
-        <span>Gastro: ${formatCurrency(totalGastro)}</span>
+        <span>Identifikationsnummer: ${identifikationsnummer}</span>
         <span>Spenden: ${formatCurrency(totalSpenden)}</span>
       </div>
 
@@ -678,16 +813,12 @@ function generateLottoHTML(lotto, days, allRunden) {
           <span>${formatCurrency(totalEinnahmen)}</span>
         </div>
         <div class="total-row">
-          <span class="label">Gastro Einnahmen</span>
-          <span>${formatCurrency(totalGastro)}</span>
-        </div>
-        <div class="total-row">
           <span class="label">Spenden</span>
           <span>${formatCurrency(totalSpenden)}</span>
         </div>
         <div class="total-row" style="font-weight:bold; border-top:1px solid #e5e7eb; padding-top:8px;">
           <span class="label" style="font-weight:bold">Einnahmen Gesamt</span>
-          <span>${formatCurrency(totalEinnahmen + totalGastro + totalSpenden)}</span>
+          <span>${formatCurrency(totalEinnahmen + totalSpenden)}</span>
         </div>
         <div class="total-row">
           <span class="label">Ausgaben Total</span>
@@ -703,7 +834,7 @@ function generateLottoHTML(lotto, days, allRunden) {
         </div>
         <div class="total-row main">
           <span class="label">Gewinn / Verlust</span>
-          <span class="${totalEinnahmen + totalGastro + totalSpenden - totalAusgaben >= 0 ? "profit" : "loss"}">${formatCurrency(totalEinnahmen + totalGastro + totalSpenden - totalAusgaben)}</span>
+          <span class="${totalEinnahmen + totalSpenden - totalAusgaben >= 0 ? "profit" : "loss"}">${formatCurrency(totalEinnahmen + totalSpenden - totalAusgaben)}</span>
         </div>
       </div>
     </body>
